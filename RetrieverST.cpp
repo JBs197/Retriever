@@ -15,9 +15,8 @@
 
 using namespace std;
 
-bool debug = 0;
 wstring local_directory = L"F:";
-wofstream ERR(L"Error Log.txt", ios_base::out);
+wofstream ERR(local_directory + L"\\Error Log.txt", ios_base::out);
 wstring search_query = L"\0";  // If no search term is desired, define as null wchar. 
 wstring negative_search_query = L"Agglomeration";  // If no search term (to be avoided) is desired, define as null wchar.
 wstring root = L"www12.statcan.gc.ca/datasets/Index-eng.cfm";
@@ -47,12 +46,14 @@ public:
 	int get_GID() { return GID; }
 	wstring get_name() { return region_name; }
 	void download_self(wstring, wstring&, wstring);
+	int plan_B(wstring, wstring&, wstring);
 };
 
 class CATALOGUE {
 	wstring name;
 	vector<CSV> pages;
 	wstring default_url;
+	wstring default_backup_url;
 public:
 	CATALOGUE() : name(L"\0"), pages(NULL), default_url(L"\0") {};
 	~CATALOGUE() {}
@@ -75,6 +76,7 @@ public:
 inline void halt(int signum)
 {
 	go = 0;
+	wcout << L"Aborting retrieval..." << endl;
 }
 
 // For a given function name, will retrieve the most current Windows error code and log 
@@ -313,6 +315,7 @@ int download(wstring url, wstring folder, wstring filename)
 	LPWSTR bufferW = new WCHAR[1];
 	int size1, size2;
 	wstring file;
+	DWORD ex_code;
 
 	hint = InternetOpenW(agent.c_str(), INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 	if (hint)
@@ -508,6 +511,79 @@ void CSV::download_self(wstring folder, wstring& default_url, wstring catalogue_
 	int error = download(url, folder, filename);
 	if (error) { warn(L"download_self for GID " + to_wstring(GID)); }
 }
+int CSV::plan_B(wstring year, wstring& db_url, wstring catalogue_name)
+{
+	wstring filename = local_directory + L"\\" + year + L"\\" + catalogue_name + L"\\" + catalogue_name + L" (" + to_wstring(GID) + L") " + region_name + L".csv";
+	wstring url = db_url;
+	size_t pos1 = url.find(L"GID=", 0);
+	pos1 += 4;
+	size_t pos2 = url.find(L"&", pos1);
+	url.replace(pos1, pos2 - pos1, to_wstring(GID));
+
+	wstring agent = L"plan_B";
+	pos1 = url.find(L'/', 0);
+	wstring server_name = url.substr(0, pos1);
+	wstring object_name = url.substr(pos1, url.size() - pos1);
+	HINTERNET hconnect = NULL;
+	HINTERNET hrequest = NULL;
+	BOOL yesno;
+	DWORD bytes_available, bytes_read;
+	LPSTR bufferA = new CHAR[1];
+	LPWSTR bufferW = new WCHAR[1];
+	wstring webpage;
+	int size1, size2;
+
+	HINTERNET hint = InternetOpenW(agent.c_str(), INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+	if (hint)
+	{
+		hconnect = InternetConnectW(hint, server_name.c_str(), INTERNET_DEFAULT_HTTP_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, NULL);
+	}
+	else { warn(L"InternetOpen"); return 1; }
+	if (hconnect)
+	{
+		hrequest = HttpOpenRequestW(hconnect, NULL, object_name.c_str(), NULL, NULL, NULL, 0, NULL);
+	}
+	else { warn(L"InternetConnect"); return 2; }
+	if (hrequest)
+	{
+		yesno = HttpSendRequest(hrequest, NULL, 0, NULL, 0);
+	}
+	else { warn(L"HttpOpenRequest"); return 3; }
+	if (yesno)
+	{
+		do
+		{
+			bytes_available = 0;
+			InternetQueryDataAvailable(hrequest, &bytes_available, 0, 0);
+			bufferA = new CHAR[bytes_available];
+			if (!InternetReadFile(hrequest, (LPVOID)bufferA, bytes_available, &bytes_read))
+			{
+				warn(L"InternetReadFile");
+				return 4;
+			}
+			size1 = MultiByteToWideChar(CP_UTF8, 0, bufferA, bytes_available, NULL, 0);
+			bufferW = new WCHAR[size1];
+			size2 = MultiByteToWideChar(CP_UTF8, 0, bufferA, bytes_available, bufferW, size1);
+			webpage.append(bufferW, size1);
+		} while (bytes_available > 0);
+		delete[] bufferA;
+		delete[] bufferW;
+	}
+	else { warn(L"HttpSendRequest"); return 5; }
+
+	pos1 = webpage.find(L"Topic-based tabulation: </span>", 0);
+	pos1 += 31;
+	pos2 = webpage.find(L'<', pos1);
+	wstring catalogue_title = webpage.substr(pos1, pos2 - pos1);
+
+	pos1 = webpage.find(L"<th id=\"col-0\" ", 0);
+	pos1 = webpage.find(L'>', pos1 + 1);
+	pos1++;
+	pos2 = webpage.find(L'<', pos1);
+
+
+	return 0;
+}
 int CSV::set_GID(wstring gid)
 {
 	try
@@ -558,10 +634,13 @@ void CATALOGUE::set_default_url(wstring& webpage, wstring server, wstring object
 	pos1 = object.rfind(L'/');
 	wstring temp2 = object.substr(0, pos1 + 1);
 	default_url = wdecode_HTML(server + temp2 + temp1);
+	default_backup_url = server + object;
 
 	bool found = 0;
 	HANDLE hfile = INVALID_HANDLE_VALUE;
+	HANDLE hfile2 = INVALID_HANDLE_VALUE;
 	wstring file_name = local_directory + L"\\" + year + L"\\" + year + L" default URLs.bin";
+	wstring backup_file_name = local_directory + L"\\" + year + L"\\" + year + L" default backup URLs.bin";
 	DWORD pos;
 	wstring bin_url;
 	for (int ii = 0; ii < existing_defaults.size(); ii++)
@@ -579,7 +658,14 @@ void CATALOGUE::set_default_url(wstring& webpage, wstring server, wstring object
 		pos = SetFilePointer(hfile, 0, NULL, FILE_END);
 		bin_url = L"[" + name + L"] " + default_url + L"\r\n";
 		if (!WriteFile(hfile, bin_url.c_str(), bin_url.size() * 2, &pos, NULL)) { err(L"WriteFile-set_default_url"); }
+
+		hfile2 = CreateFileW(backup_file_name.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+		if (hfile2 == INVALID_HANDLE_VALUE) { err(L"CreateFile-set_default_url(backup)"); }
+		pos = SetFilePointer(hfile2, 0, NULL, FILE_END);
+		bin_url = L"[" + name + L"] " + default_backup_url + L"\r\n";
+		if (!WriteFile(hfile2, bin_url.c_str(), bin_url.size() * 2, &pos, NULL)) { err(L"WriteFile-set_default_url(backup)"); }
 	}
+	if (hfile2) { CloseHandle(hfile2); }
 	if (hfile) { CloseHandle(hfile); }
 }
 wstring CATALOGUE::make_url(int GID)
@@ -669,8 +755,10 @@ int CATALOGUE::consistency_check(wstring year)
 			case 2:
 				count++;
 				delete_file(filename);
-				temp1 = local_directory + L"\\" + year + L"\\" + name;
-				pages[ii].download_self(temp1, default_url, name);
+				if (pages[ii].plan_B(year, default_backup_url, name))
+				{
+					ERR << L"File name " + filename + L" failed to pass consistency_check after re-download." << endl;
+				}
 				break;
 			}
 		}
@@ -852,18 +940,17 @@ void yearly_downloader(wstring year)
 
 	wcout << L"Navigation complete!" << endl;
 	progress[1] = data_map.size();
-	for (int ii = 0; ii < data_map.size(); ii++)
-	{
-		data_map[ii].download_CSVs(year_folder);
-	}
-
 	int result = 0;
 	for (int ii = 0; ii < data_map.size(); ii++)
 	{
-		result = data_map[ii].consistency_check(year);
-		if (result)
+		if (go)
 		{
-			wcout << L"Catalogue " << data_map[ii].get_name() << L" had " << result << L" consistency errors." << endl;
+			data_map[ii].download_CSVs(year_folder);
+			result = data_map[ii].consistency_check(year);
+			if (result)
+			{
+				wcout << L"Catalogue " << data_map[ii].get_name() << L" had " << result << L" consistency errors." << endl;
+			}
 		}
 	}
 
@@ -906,6 +993,6 @@ int main()
 
 	initialize(year);
 	yearly_downloader(year);
-	//download(L"www12.statcan.gc.ca/census-recensement/2006/dp-pd/prof/rel/Rp-eng.cfm?LANG=E&APATH=3&DETAIL=1&DIM=0&FL=A&FREE=1&GC=0&GID=0&GK=0&GRP=1&PID=89108&PRID=0&PTYPE=89103&S=0&SHOWALL=No&SUB=0&Temporal=2006&THEME=66&VID=0&VNAMEE=&VNAMEF=", L"F:", L"2006yescsv.txt");
+	//download(L"www12.statcan.gc.ca/English/census91/data/tables/Rp-eng.cfm?TABID=2&LANG=E&APATH=3&DETAIL=1&DIM=0&FL=A&FREE=1&GC=0&GID=183131&GK=0&GRP=1&PID=173&PRID=0&PTYPE=4&S=0&SHOWALL=No&SUB=0&Temporal=1991&THEME=101&VID=0&VNAMEE=&VNAMEF=&D1=0&D2=0&D3=0&D4=0&D5=0&D6=0", L"F:", L"1991halifax.txt");
 	return 0;
 }
