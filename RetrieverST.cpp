@@ -17,8 +17,8 @@ using namespace std;
 
 wstring local_directory = L"F:";
 wofstream ERR(local_directory + L"\\Error Log.txt", ios_base::out);
-wstring search_query = L"\0";  // If no search term is desired, define as null wchar. 
-wstring negative_search_query = L"Agglomeration";  // If no search term (to be avoided) is desired, define as null wchar.
+vector<wstring> search_query = { L"\0" };  // If no search term is desired, define as null wstring. 
+vector<wstring> negative_search_query = { L"Agglomeration", L"20%" };  // If no search term (to be avoided) is desired, define as null wstring.
 wstring root = L"www12.statcan.gc.ca/datasets/Index-eng.cfm";
 vector<wstring> domains = { L".com", L".net", L".org", L".edu", L".ca" };
 vector<int> years = { 1981, 1986, 1991, 1996, 2001, 2006, 2011, 2013, 2016, 2017 };
@@ -105,6 +105,8 @@ void warn(wstring func)
 	wstring output = func + L" caused error " + to_wstring(num) + L": " + message;
 	ERR << message << endl;
 }
+
+// Error outputs for caught exceptions. 
 void inv_arg(wstring func, invalid_argument& ia)
 {
 	ERR << func << L" caused " << ia.what() << endl;
@@ -221,6 +223,7 @@ int file_consistency(wstring filename)
 	return 0;
 };
 
+// Given a full path name, delete the file.
 void delete_file(wstring filename)
 {
 	HANDLE hfile = CreateFileW(filename.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -491,6 +494,7 @@ bool gid_check(int GID, vector<int>& list)
 	return 0;
 }
 
+// Crude DOS progress bar.
 void download_percentage(wstring cata_name)
 {
 	int percentage;
@@ -976,7 +980,7 @@ int CATALOGUE::consistency_check(wstring year)
 	return count;
 }
 
-// Extracts pieces from a URL.
+// Extracts pieces from a URL.  
 wstring get_server(wstring url)
 {
 	size_t pos;
@@ -1001,8 +1005,8 @@ wstring get_object(wstring url)
 }
 
 // From a given URL, will use search criteria to find every downloadable .csv file within
-// the expanding tree of catalogue pages/redirects. Saves the final download URLs in local
-// temp files to reduce memory usage and repetition of work in case of interruption or restart. 
+// the expanding tree of catalogue pages/redirects. A template URL is saved in local storage for 
+// every catalogue to reduce memory usage and repetition of work in case of interruption or restart. 
 void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATALOGUE>& data_map, int catalogue_index, wstring year)
 {
 	HINTERNET hrequest = NULL;
@@ -1050,32 +1054,9 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 			}
 		}
 	}
-	else if (search_query != L"\0")  // NOTE: NEEDS REVISION
+	else if (search_query[0] != L"\0")
 	{
-		pos1 = 1;
-		while (pos1 > 0 && pos1 < complete_webpage.size())
-		{
-			pos1 = complete_webpage.find(search_query, pos1 + 1);
-			if (pos1 < complete_webpage.size())
-			{
-				data_map.push_back(cata);
-				catalogue_index++;
-				data_map[catalogue_index].set_name(complete_webpage, pos1);
-				data_map[catalogue_index].make_folder(year);
-
-				pos2 = complete_webpage.find(L'/', pos1);
-				pos3 = complete_webpage.find(L'"', pos2);
-				temp1 = complete_webpage.substr(pos2, pos3 - pos2);
-				url_redir.push_back(temp1);
-			}
-		}
-		for (int ii = 0; ii < url_redir.size(); ii++)
-		{
-			navigator(hconnect, server, url_redir[ii], data_map, ii, year);
-		}
-	}
-	else if (negative_search_query != L"\0")
-	{
+		yesno = 0;
 		pos_start = complete_webpage.find(L"<tbody>", 0);
 		pos_stop = complete_webpage.rfind(L"</tbody>", complete_webpage.size() - 10);
 		pos1 = pos_start + 1;
@@ -1086,9 +1067,51 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 			pos2 = complete_webpage.rfind(L"<td>", pos1);
 			temp1 = complete_webpage.substr(pos2, pos1 - pos2);
 			pos3 = 0;
-			pos3 = temp1.find(negative_search_query, 0);
-			if (pos3 > 0 && pos3 < temp1.size()) { continue; }
-			else
+			for (int ii = 0; ii < search_query.size(); ii++)
+			{
+				pos3 = temp1.find(search_query[ii], 0);
+				if (pos3 > 0 && pos3 < temp1.size()) { yesno = 1; }
+			}
+			if (yesno)
+			{
+				if (pos1 < complete_webpage.size())
+				{
+					data_map.push_back(cata);
+					catalogue_index++;
+					data_map[catalogue_index].set_name(complete_webpage, pos1);
+					data_map[catalogue_index].make_folder(year);
+
+					pos2 = complete_webpage.find(L'/', pos1);
+					pos3 = complete_webpage.find(L'"', pos2);
+					temp1 = complete_webpage.substr(pos2, pos3 - pos2);
+					url_redir.push_back(temp1);
+				}
+			}
+		}
+		for (int ii = 0; ii < url_redir.size(); ii++)
+		{
+			navigator(hconnect, server, url_redir[ii], data_map, ii, year);
+		}
+	}
+	else if (negative_search_query[0] != L"\0")
+	{
+		yesno = 0;
+		pos_start = complete_webpage.find(L"<tbody>", 0);
+		pos_stop = complete_webpage.rfind(L"</tbody>", complete_webpage.size() - 10);
+		pos1 = pos_start + 1;
+		while (pos1 > pos_start && pos1 < pos_stop)
+		{
+			pos1 = complete_webpage.find(L"HTML ", pos1 + 1);
+			if (pos1 > pos_stop) { break; }
+			pos2 = complete_webpage.rfind(L"<td>", pos1);
+			temp1 = complete_webpage.substr(pos2, pos1 - pos2);
+			pos3 = 0;
+			for (int ii = 0; ii < negative_search_query.size(); ii++)
+			{
+				pos3 = temp1.find(negative_search_query[ii], 0);
+				if (pos3 > 0 && pos3 < temp1.size()) { yesno = 1; }
+			}
+			if (!yesno)
 			{
 				if (pos1 < complete_webpage.size())
 				{
@@ -1112,9 +1135,10 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 }
 
 // Downloads all .csv files (matching search criteria) for a given year and root URL. 
-// Folders are organized by year -> catalogue#, and .csv files are named as 
+// Folders are organized by root -> year -> catalogue#, and .csv files are named as 
 // [catalogue#] [(GID)] [region name].csv
-// Upon successful conclusion, will delete all temp files made by navigator. 
+// After downloading all CSVs for the given year, it will check those files for known 
+// errors, and if necessary it will attempt to replace bad files using "plan B". 
 void yearly_downloader(wstring year)
 {
 	vector<CATALOGUE> data_map;
