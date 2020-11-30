@@ -142,6 +142,30 @@ wstring wdecode_HTML(wstring html)
 	return output;
 }
 
+// Removes TABs from the start, spaces and newlines from the end, and commas throughout.
+wstring clean_B(wstring in)
+{
+	wstring out = in;
+	for (int ii = 0; ii < in.size(); ii++)
+	{
+		if (in[ii] != L'\t')
+		{
+			out.erase(0, ii);
+			break;
+		}
+	}
+	for (int ii = out.size() - 1; ii >= 0; ii--)
+	{
+		if (out[ii] == L' ' || out[ii] == L'\r') { out.pop_back(); }
+		else { break; }
+	}
+	for (int ii = out.size() - 1; ii >= 0; ii--)
+	{
+		if (out[ii] == L',') { out.erase(ii, 1); }
+	}
+	return out;
+}
+
 // Read into memory a (local .bin file / webpage).
 wstring bin_memory(HANDLE& hfile)
 {
@@ -213,6 +237,7 @@ void CALLBACK call(HINTERNET hint, DWORD_PTR dw_context, DWORD dwInternetStatus,
 	string temp;
 	wstring wtemp;
 	bool yesno = 0;
+	int count = 0;
 
 	switch (dwInternetStatus)
 	{
@@ -249,14 +274,16 @@ void CALLBACK call(HINTERNET hint, DWORD_PTR dw_context, DWORD dwInternetStatus,
 	case INTERNET_STATUS_REDIRECT:
 		for (int ii = 0; ii < 512; ii++)
 		{
-			if ((cpContext->szMemo)[ii] != '\0') { temp.push_back((cpContext->szMemo)[ii]); }
+			if ((cpContext->szMemo)[ii] != '\0') { temp.push_back((cpContext->szMemo)[ii]); count = 0; }
+			else { count++; }
+
+			if (count > 2) { break; }
 		}
 		for (int ii = 0; ii < temp.size(); ii++)
 		{
 			if (temp[ii] == '/') { yesno = 1; }
 			else if (temp[ii] < 0)
 			{
-				objects.push_back(wtemp);
 				break;
 			}
 			if (yesno)
@@ -264,6 +291,7 @@ void CALLBACK call(HINTERNET hint, DWORD_PTR dw_context, DWORD dwInternetStatus,
 				wtemp.push_back((wchar_t)temp[ii]);
 			}
 		}
+		objects.push_back(wtemp);
 		break;
 	case INTERNET_STATUS_REQUEST_COMPLETE:
 
@@ -571,17 +599,195 @@ int CSV::plan_B(wstring year, wstring& db_url, wstring catalogue_name)
 	}
 	else { warn(L"HttpSendRequest"); return 5; }
 
-	pos1 = webpage.find(L"Topic-based tabulation: </span>", 0);
-	pos1 += 31;
+	vector<vector<wstring>> rows;
+	vector<wstring> variable(2);
+	vector<wstring> header_row;
+	int type;
+	wstring temp1, temp2;
+	pos1 = webpage.find(L"<thead", 0);
+	pos2 = webpage.find(L'>', pos1);
+	size_t pos3 = webpage.find(L"style", pos1);
+	if (pos3 > pos1 && pos3 < pos2) { type = 1; }
+	else { type = 2; }
+
+	pos1 = webpage.find(L"id=\"tabulation-title", 0);
+	pos1 = webpage.find(L"</span>", pos1);
+	pos1 += 7;
 	pos2 = webpage.find(L'<', pos1);
+	pos2 = webpage.find_last_not_of(L' ', pos2 - 1);
+	pos2++;
 	wstring catalogue_title = webpage.substr(pos1, pos2 - pos1);
 
-	pos1 = webpage.find(L"<th id=\"col-0\" ", 0);
-	pos1 = webpage.find(L'>', pos1 + 1);
-	pos1++;
-	pos2 = webpage.find(L'<', pos1);
+	wstring source_line;
+	size_t pos_start, pos_end, pos_table_start, pos_table_end;
+	switch (type)
+	{
+	case 1:
+		pos1 = webpage.rfind(L"<tbody>", webpage.size() - 10);
+		pos1 = webpage.find(L"class", pos1 + 1);
+		pos_end = webpage.rfind(L"</tbody>", webpage.size() - 10);
+		do
+		{
+			rows.push_back(vector<wstring>(2));
+			pos1 = webpage.find(L'\n', pos1 + 1); 
+			pos1++;
+			pos2 = webpage.find(L'\n', pos1);
+			temp1 = webpage.substr(pos1, pos2 - pos1);
+			rows[rows.size() - 1][0] = clean_B(temp1);
 
+			pos1 = webpage.find(L"<td", pos2);
+			pos1 = webpage.find(L'\n', pos1);
+			pos1++;
+			pos2 = webpage.find(L'\n', pos1);
+			temp1 = webpage.substr(pos1, pos2 - pos1);
+			rows[rows.size() - 1][1] = clean_B(temp1);
+			pos1 = webpage.find(L"class", pos2);
 
+		} while (pos1 < pos_end);
+
+		pos1 = webpage.rfind(L"Source:", webpage.size() - 10);
+		pos1 = webpage.find(L'>', pos1);
+		pos1++;
+		pos2 = webpage.find(L'\n', pos1);
+		source_line = webpage.substr(pos1, pos2 - pos1 - 1);
+		break;
+
+	case 2:
+		pos_end = webpage.find(L"id=\"tabulation\"", 0);
+		pos_start = webpage.rfind(L"div-d1", pos_end);
+		pos1 = webpage.find(L"option", pos_start);
+		if (pos1 > pos_start && pos1 < pos_end)  // Store the variable names if this file has variables. 
+		{
+			pos2 = webpage.rfind(L"title", pos1);
+			pos1 = webpage.find(L'>', pos2);
+			pos1++;
+			pos2 = webpage.find(L'<', pos1);
+			temp1 = webpage.substr(pos1, pos2 - pos1);
+			variable[0] = clean_B(temp1);
+
+			pos2 = webpage.find(L"\"selected\"", pos2);
+			pos1 = webpage.find(L'>', pos2);
+			pos1++;
+			pos2 = webpage.find(L'<', pos1);
+			temp1 = webpage.substr(pos1, pos2 - pos1);
+			variable[1] = clean_B(temp1);
+		}
+
+		pos1 = webpage.find(L"<thead", 0);
+		pos1 = webpage.find(L"col-0", pos1);
+		pos1 = webpage.find(L'>', pos1);
+		pos1++;
+		pos2 = webpage.find(L'<', pos1);
+		temp1 = webpage.substr(pos1, pos2 - pos1);
+		header_row.push_back(clean_B(temp1));
+
+		pos_start = webpage.find(L"<tr", pos2);
+		pos_end = webpage.find(L"</tr", pos_start);
+		pos1 = webpage.find(L"id", pos_start);
+		do
+		{
+			pos1 = webpage.find(L'>', pos1);
+			pos1++;
+			pos2 = webpage.find(L'<', pos1);
+			temp1 = webpage.substr(pos1, pos2 - pos1);
+			header_row.push_back(clean_B(temp1));
+			pos1 = webpage.find(L"id", pos2);
+		} while (pos1 < pos_end && pos1 > pos_start);
+
+		pos_table_end = webpage.rfind(L"</tbody>", webpage.size() - 10);
+		pos_table_start = webpage.rfind(L"<tbody>", pos_table_end);
+		pos_start = webpage.find(L"<tr>", pos_table_start);
+		do
+		{
+			rows.push_back(vector<wstring>());
+			size1 = 0;
+			pos_end = webpage.find(L"</tr>", pos_start);
+
+			pos1 = webpage.find(L"font", pos_start);
+			pos1 += 4;
+			pos2 = webpage.find(L"align", pos1);
+			temp1 = webpage.substr(pos1, pos2 - pos1);
+			pos3 = temp1.find(L"indent", 0);
+			if (pos3 < temp1.size())
+			{
+				pos1 = temp1.find_first_of(L"1234567890");
+				temp2 = temp1.substr(pos1, 1);
+				try
+				{
+					size1 = stoi(temp2);
+				}
+				catch (invalid_argument& ia)
+				{
+					inv_arg(to_wstring(GID) + L" into plan_B ", ia);
+					size1 = 0;
+				}
+			}
+
+			pos1 = webpage.find(L"</th>", pos_start);
+			pos2 = webpage.rfind(L'\n', pos1);
+			pos1 = webpage.rfind(L'\t', pos2);
+			pos1++;
+			temp1.clear();
+			if (size1 > 0)
+			{
+				for (int ii = 0; ii < size1; ii++) { temp1 += L"  "; }
+			}
+			temp1 += webpage.substr(pos1, pos2 - pos1);
+			rows[rows.size() - 1].push_back(clean_B(temp1));
+
+			pos3 = webpage.find(L"</td>", pos2);
+			do
+			{
+				pos2 = webpage.rfind(L"\t ", pos3 - 2);
+				pos2++;
+				pos1 = webpage.find_first_not_of(L' ', pos2);
+				pos2 = webpage.find(L' ', pos1);
+				temp1 = webpage.substr(pos1, pos2 - pos1);
+				rows[rows.size() - 1].push_back(clean_B(temp1));
+				pos3 = webpage.find(L"</td>", pos3 + 1);
+			} while (pos3 < pos_end && pos3 > pos_start);
+
+			pos_start = webpage.find(L"<tr>", pos_end);
+		} while (pos_start < pos_table_end && pos_start > pos_table_start);
+
+		pos1 = webpage.rfind(L"Source:", webpage.size() - 10);
+		pos1 = webpage.find(L'>', pos1);
+		pos1++;
+		pos2 = webpage.find(L'\n', pos1);
+		source_line = webpage.substr(pos1, pos2 - pos1 - 1);
+		break;
+	}
+
+	HANDLE hfile = CreateFileW(filename.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hfile == INVALID_HANDLE_VALUE) { warn(L"CreateFile-plan_B"); return 6; }
+	DWORD bytes_written;
+	wstring file = L"\"" + catalogue_title + L"\"\r\n\"Geography = " + region_name + L"\"\r\n";
+	if (type == 2)
+	{
+		if (variable[0].size() > 0) { file += L"\"" + variable[0] + L" = " + variable[1] + L"\"\r\n"; }
+		for (int ii = 0; ii < header_row.size(); ii++)
+		{
+			file += L"\"" + header_row[ii] + L"\",";
+			if (ii == header_row.size() - 1) { file += L" \r\n"; }
+		}
+	}
+	for (int ii = 0; ii < rows.size(); ii++)
+	{
+		file += L"\"" + rows[ii][0] + L"\"";
+		for (int jj = 1; jj < rows[ii].size(); jj++)
+		{
+			file += L"," + rows[ii][jj];
+		}
+		file += L" \r\n";
+	}
+	file += L"\"Note\"\r\n";
+	file += L"\"Source:" + source_line + L"\"\r\n";
+	DWORD file_size = file.size() * 2;
+	if (!WriteFile(hfile, file.c_str(), file_size, &bytes_written, NULL)) { warn(L"WriteFile-plan_B"); return 7; }
+	
+	if (hrequest) { InternetCloseHandle(hrequest); }
+	if (hconnect) { InternetCloseHandle(hconnect); }
+	if (hint) { InternetCloseHandle(hint); }
 	return 0;
 }
 int CSV::set_GID(wstring gid)
@@ -758,6 +964,10 @@ int CATALOGUE::consistency_check(wstring year)
 				if (pages[ii].plan_B(year, default_backup_url, name))
 				{
 					ERR << L"File name " + filename + L" failed to pass consistency_check after re-download." << endl;
+				}
+				else
+				{
+					ERR << L"File name " + filename + L" was downloaded through plan_B." << endl;
 				}
 				break;
 			}
@@ -993,6 +1203,6 @@ int main()
 
 	initialize(year);
 	yearly_downloader(year);
-	//download(L"www12.statcan.gc.ca/English/census91/data/tables/Rp-eng.cfm?TABID=2&LANG=E&APATH=3&DETAIL=1&DIM=0&FL=A&FREE=1&GC=0&GID=183131&GK=0&GRP=1&PID=173&PRID=0&PTYPE=4&S=0&SHOWALL=No&SUB=0&Temporal=1991&THEME=101&VID=0&VNAMEE=&VNAMEF=&D1=0&D2=0&D3=0&D4=0&D5=0&D6=0", L"F:", L"1991halifax.txt");
+	//download(L"www12.statcan.gc.ca/English/census91/data/tables/Rp-eng.cfm?LANG=E&APATH=3&DETAIL=1&DIM=0&FL=A&FREE=1&GC=0&GID=0&GK=0&GRP=1&PID=173&PRID=0&PTYPE=4&S=0&SHOWALL=No&SUB=0&Temporal=1991&THEME=101&VID=0&VNAMEE=&VNAMEF=", L"F:", L"1991StJohns webpage.txt");	
 	return 0;
 }
