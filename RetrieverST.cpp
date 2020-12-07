@@ -10,7 +10,7 @@
 #include <strsafe.h>
 #include <wininet.h>
 #include <stdexcept>
-#include "Retriever Input.h"
+#include "RetrieverST.h"
 
 #pragma comment(lib, "wininet.lib")
 
@@ -22,6 +22,7 @@ vector<wstring> objects;
 vector<bool> temp_ready;
 vector<int> progress = { 0, 0 };
 bool go = 1;
+bool debug = 0;
 
 typedef struct {
 	HWND       hWindow;
@@ -53,15 +54,16 @@ public:
 	CATALOGUE() : name(L"\0"), pages(NULL), default_url(L"\0") {};
 	~CATALOGUE() {}
 	void set_name(wstring&, size_t);
+	wstring get_name() { return name; }
 	void make_folder(wstring&, wstring);
 	bool check_default();
 	void set_default_url(wstring&, wstring, wstring, wstring);
 	wstring make_url(int);
+	int check_named(wstring&, size_t);
 	int make_CSV();
 	void purge_CSVs();
 	int set_CSV_gid(int, wstring&, int);
 	void set_CSV_name(int, wstring&, int);
-	wstring get_name() { return name; }
 	vector<int> get_CSV_wishlist(wstring);
 	void download_CSVs(wstring);
 	int consistency_check(wstring);
@@ -220,13 +222,29 @@ int file_consistency(wstring filename)
 	return 0;
 };
 
-// Given a full path name, delete the file.
+// Given a full path name, delete the file/folder.
 void delete_file(wstring filename)
 {
 	HANDLE hfile = CreateFileW(filename.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hfile == INVALID_HANDLE_VALUE) { warn(L"CreateFile-delete_file"); }
 	if (!DeleteFileW(filename.c_str())) { warn(L"DeleteFile-delete_file"); }
 	if (!CloseHandle(hfile)) { warn(L"CloseHandle-delete_file"); }
+}
+void delete_folder(wstring folder_name)
+{
+	wstring folder_search = folder_name + L"\\*";
+	WIN32_FIND_DATAW info;
+	HANDLE hfile1 = FindFirstFileW(folder_search.c_str(), &info);
+	wstring file_name;
+	do
+	{
+		file_name = folder_name + L"\\" + info.cFileName;
+		if (file_name.back() != L'.') { delete_file(file_name); }
+	} while (FindNextFileW(hfile1, &info));
+	
+	BOOL yesno = RemoveDirectoryW(folder_name.c_str());
+	if (yesno) { wcout << L"Succeeded in deleting folder " << folder_name << endl; }
+	else { wcout << L"Failed to delete folder " << folder_name << endl; }
 }
 
 // Contains pre-programmed responses to certain automated events during server-client communications.
@@ -563,6 +581,49 @@ int remove_blank(wstring folder)
 		}
 	} while (FindNextFileW(hfile1, &info));
 	return count;
+}
+
+// For a given year, delete all the saved catalogue folders that did not pass the criteria filters. 
+void remove_folder(wstring year, vector<CATALOGUE>& data_map)
+{
+	wstring year_folder = local_directory + L"\\" + year;
+	wstring year_folder_search = year_folder + L"\\*";
+	WIN32_FIND_DATAW info;
+	HANDLE hfile1 = FindFirstFileW(year_folder_search.c_str(), &info);
+	HANDLE hfile2 = INVALID_HANDLE_VALUE;
+	wstring cata_folder;
+	size_t pos1;
+	vector<wstring> existing_cata_folders;
+	vector<wstring> existing_cata_names;
+
+	do
+	{
+		cata_folder = year_folder + L"\\" + info.cFileName;
+		pos1 = cata_folder.find(L'.', 0);
+		if (pos1 < cata_folder.size()) { continue; }
+		existing_cata_folders.push_back(cata_folder);
+		existing_cata_names.push_back(info.cFileName);
+	} while (FindNextFileW(hfile1, &info));
+
+	wstring target_name;
+	for (int ii = 0; ii < data_map.size(); ii++)
+	{
+		target_name = data_map[ii].get_name();
+		for (int jj = 0; jj < existing_cata_names.size(); jj++)
+		{
+			if (target_name == existing_cata_names[jj])
+			{
+				existing_cata_folders.erase(existing_cata_folders.begin() + jj);
+				existing_cata_names.erase(existing_cata_names.begin() + jj);
+				break;
+			}
+		}
+	}
+
+	for (int ii = 0; ii < existing_cata_folders.size(); ii++)
+	{
+		delete_folder(existing_cata_folders[ii]);
+	}
 }
 
 // CSV object functions.
@@ -924,6 +985,16 @@ wstring CATALOGUE::make_url(int GID)
 	url.replace(pos1, pos2 - pos1, to_wstring(GID));
 	return url;
 }
+int CATALOGUE::check_named(wstring& webpage, size_t pos1)
+{
+	size_t pos2 = webpage.find(L'>', pos1);
+	pos2++;
+	size_t pos3 = webpage.find(L'<', pos2);
+	wstring region = webpage.substr(pos2, pos3 - pos2);
+	pos2 = region.find_first_not_of(L"1234567890");
+	if (pos2 < region.size()) { return 1; }
+	return 0;
+}
 int CATALOGUE::make_CSV()
 {
 	CSV csv;
@@ -1106,13 +1177,14 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 			pos1 = complete_webpage.find(L"value=", pos1 + 1);
 			if (pos1 < pos_stop)
 			{
+				if (!data_map[catalogue_index].check_named(complete_webpage, pos1)) { continue; }
 				csv_index = data_map[catalogue_index].make_CSV();
 				if (data_map[catalogue_index].set_CSV_gid(csv_index, complete_webpage, pos1)) { continue; }
 				data_map[catalogue_index].set_CSV_name(csv_index, complete_webpage, pos1);
 			}
 		}
 	}
-	else if (search_query[0] != L"\0")
+	/* else if (search_query[0] != L"\0")
 	{
 		yesno = 0;
 		pos_start = complete_webpage.find(L"<tbody>", 0);
@@ -1150,15 +1222,15 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 		{
 			navigator(hconnect, server, url_redir[ii], data_map, ii, year);
 		}
-	}
-	else if (negative_search_query[0] != L"\0")
+	} */
+	else
 	{
-		yesno = 0;
 		pos_start = complete_webpage.find(L"<tbody>", 0);
 		pos_stop = complete_webpage.rfind(L"</tbody>", complete_webpage.size() - 10);
 		pos1 = pos_start + 1;
 		while (pos1 > pos_start && pos1 < pos_stop)
 		{
+			yesno = 0;
 			pos1 = complete_webpage.find(L"HTML ", pos1 + 1);
 			if (pos1 > pos_stop) { break; }
 			pos2 = complete_webpage.rfind(L"<td>", pos1);
@@ -1224,8 +1296,14 @@ void yearly_downloader(wstring year)
 		navigator(hconnect, server, object, data_map, -1, year);
 	}
 	else { err(L"InternetConnect"); }
-
 	wcout << L"Navigation complete!" << endl;
+
+	if (debug)
+	{
+		remove_folder(year, data_map);
+		exit(EXIT_SUCCESS);
+	}
+
 	progress[1] = data_map.size();
 	int result = 0;
 	for (int ii = 0; ii < data_map.size(); ii++)
@@ -1275,6 +1353,12 @@ void initialize(wstring year)
 		pos1 = wfile.find(L'[', pos2);
 	}
 	if (!CloseHandle(hfile)) { warn(L"CloseHandle-initialize"); }
+
+	negative_search_query.push_back(L"Sortation");           // These exclusion criteria are hardcoded because
+	negative_search_query.push_back(L"Dissemination");       // their regions are named only by numeric code, 
+	negative_search_query.push_back(L"Tract");               // for which definitions are inaccessible. 
+	negative_search_query.push_back(L"Enumeration");
+
 }
 
 int main()
@@ -1292,6 +1376,6 @@ int main()
 
 	initialize(year);
 	yearly_downloader(year);
-	//download(L"www12.statcan.gc.ca/English/census91/data/tables/Rp-eng.cfm?TABID=2&LANG=E&APATH=3&DETAIL=1&DIM=0&FL=A&FREE=1&GC=0&GID=1110&GK=0&GRP=1&PID=86&PRID=0&PTYPE=4&S=0&SHOWALL=No&SUB=0&Temporal=1991&THEME=101&VID=0&VNAMEE=&VNAMEF=&D1=0&D2=0&D3=0&D4=0&D5=0&D6=0#tab4", L"F:", L"wtf.txt");	
+	//download(L"www12.statcan.gc.ca/datasets/Index-eng.cfm?Temporal=1991", L"F:", L"1991nocsv.txt");	
 	return 0;
 }
