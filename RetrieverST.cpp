@@ -10,18 +10,13 @@
 #include <strsafe.h>
 #include <wininet.h>
 #include <stdexcept>
+#include "Retriever Input.h"
 
 #pragma comment(lib, "wininet.lib")
 
 using namespace std;
 
-wstring local_directory = L"F:";
-wofstream ERR(local_directory + L"\\Error Log.txt", ios_base::out);
-vector<wstring> search_query = { L"\0" };  // If no search term is desired, define as null wstring. 
-vector<wstring> negative_search_query = { L"Agglomeration", L"20%" };  // If no search term (to be avoided) is desired, define as null wstring.
-wstring root = L"www12.statcan.gc.ca/datasets/Index-eng.cfm";
-vector<wstring> domains = { L".com", L".net", L".org", L".edu", L".ca" };
-vector<int> years = { 1981, 1986, 1991, 1996, 2001, 2006, 2011, 2013, 2016, 2017 };
+wofstream ERR(local_directory + L"\\Error Log.txt", ios_base::out | ios_base::app);
 vector<wstring> existing_defaults;
 vector<wstring> objects;
 vector<bool> temp_ready;
@@ -58,17 +53,19 @@ public:
 	CATALOGUE() : name(L"\0"), pages(NULL), default_url(L"\0") {};
 	~CATALOGUE() {}
 	void set_name(wstring&, size_t);
-	void make_folder(wstring&);
+	void make_folder(wstring&, wstring);
 	bool check_default();
 	void set_default_url(wstring&, wstring, wstring, wstring);
 	wstring make_url(int);
 	int make_CSV();
+	void purge_CSVs();
 	int set_CSV_gid(int, wstring&, int);
 	void set_CSV_name(int, wstring&, int);
 	wstring get_name() { return name; }
 	vector<int> get_CSV_wishlist(wstring);
 	void download_CSVs(wstring);
 	int consistency_check(wstring);
+	void graveyard(wstring, int);
 };
 
 // Hit ctrl+c to have the program stop downloading new files, and terminate when 
@@ -218,7 +215,7 @@ int file_consistency(wstring filename)
 	if (hfile == INVALID_HANDLE_VALUE) { warn(L"CreateFile-file_consistency"); return 1; }
 	wstring wfile = bin_memory(hfile);
 	if (!CloseHandle(hfile)) { warn(L"CloseHandle-file_consistency"); }
-	size_t pos1 = wfile.rfind(L"<!DOCTYPE html>", 50);
+	size_t pos1 = wfile.find(L"<!DOCTYPE html>", 0);
 	if (pos1 < wfile.size()) { return 2; }
 	return 0;
 };
@@ -427,18 +424,19 @@ void quicksort(vector<int>& list, int low, int high)
 }
 
 // Return a vector of sorted integer GIDs already present in the given folder.
+// Will also include GIDs listed in that catalogue's graveyard (do not download).
 vector<int> gid_scanner(wstring folder)
 {
 	vector<int> list;
 	wstring file_generic = folder + L"\\*.csv";
 	wstring file_name, gid;
-	int pos1, pos2;
+	size_t pos1, pos2;
 	WIN32_FIND_DATAW info;
 	HANDLE hfile = INVALID_HANDLE_VALUE;
 	hfile = FindFirstFileW(file_generic.c_str(), &info);
 	DWORD error = GetLastError();
 	if (hfile == INVALID_HANDLE_VALUE && error != ERROR_FILE_NOT_FOUND) { warn(L"FindFirstFile-gid_scanner"); }
-	else if (hfile == INVALID_HANDLE_VALUE) { return list; }
+	else if (hfile == INVALID_HANDLE_VALUE) {}
 	else
 	{
 		do
@@ -466,6 +464,42 @@ vector<int> gid_scanner(wstring folder)
 			}
 		} while (FindNextFileW(hfile, &info));
 	}
+
+	pos1 = folder.rfind(L'\\');
+	wstring cata_name = folder.substr(pos1 + 1);
+	pos2 = folder.rfind(L'\\', pos1 - 1);
+	pos2++;
+	wstring year = folder.substr(pos2, pos1 - pos2);
+	wstring gy_filename = folder.substr(0, pos1);
+	gy_filename += L"\\" + year + L" Graveyard\\" + cata_name + L".bin";
+	wstring gy_list;
+	HANDLE hfile2 = CreateFileW(gy_filename.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hfile2 == INVALID_HANDLE_VALUE) 
+	{
+		error = GetLastError();
+		if (error != ERROR_FILE_NOT_FOUND) { err(L"CreateFile-gid_scanner"); }
+	}
+	else
+	{
+		gy_list = bin_memory(hfile2);
+		pos1 = 0;
+		while (pos1 < gy_list.size())
+		{
+			pos2 = gy_list.find(L'\r', pos1);
+			gid = gy_list.substr(pos1, pos2 - pos1);
+			try
+			{
+				list.push_back(stoi(gid));
+			}
+			catch (invalid_argument& ia)
+			{
+				inv_arg(gid + L" into gid_scanner", ia);
+			}
+			pos1 = gy_list.find_first_of(L"1234567890", pos2);
+		}
+		CloseHandle(hfile2);
+	}
+	
 	quicksort(list, 0, list.size() - 1);
 	return list;
 }
@@ -603,14 +637,15 @@ int CSV::plan_B(wstring year, wstring& db_url, wstring catalogue_name)
 	}
 	else { warn(L"HttpSendRequest"); return 5; }
 
-	vector<vector<wstring>> rows;
-	vector<wstring> variable(2);
-	vector<wstring> header_row;
-	int type;
-	wstring temp1, temp2;
+	vector<vector<wstring>> rows;      // Type-1 webpages have 1 column of data per CSV. Type-2 webpages
+	vector<wstring> variable(2);       // have multiple column sub-headers, each one of which has its own
+	vector<wstring> header_row;        // column of data that must be re-structured as its own column.
+	int type;                          // Condensing 2D data into 1D is necessary for SQL organization,
+	wstring temp1, temp2;              // so that each CSV file can have its own unique row.
 	pos1 = webpage.find(L"<thead", 0);
-	pos2 = webpage.find(L'>', pos1);
-	size_t pos3 = webpage.find(L"style", pos1);
+	if (pos1 > webpage.size()) { return 8; }  // In this case, even the backup is offline. Graveyard. 
+	pos2 = webpage.find(L'>', pos1);     
+	size_t pos3 = webpage.find(L"style", pos1);  
 	if (pos3 > pos1 && pos3 < pos2) { type = 1; }
 	else { type = 2; }
 
@@ -819,9 +854,10 @@ void CATALOGUE::set_name(wstring& webpage, size_t pos1)
 	if (pos2 < temp1.size()) { temp1.replace(pos2, 1, L"of"); }
 	name = temp1;
 }
-void CATALOGUE::make_folder(wstring& cata_folder)
+void CATALOGUE::make_folder(wstring& year_folder, wstring year)
 {
 	DWORD gle;
+	wstring cata_folder = year_folder + L"\\" + name;
 	BOOL error = CreateDirectoryW(cata_folder.c_str(), NULL);
 	if (!error)
 	{
@@ -895,6 +931,10 @@ int CATALOGUE::make_CSV()
 	int index = pages.size() - 1;
 	return index;
 }
+void CATALOGUE::purge_CSVs()
+{
+	pages.clear();
+}
 int CATALOGUE::set_CSV_gid(int index, wstring& webpage, int pos1)
 {
 	pos1 += 7;
@@ -927,7 +967,7 @@ vector<int> CATALOGUE::get_CSV_wishlist(wstring catalogue_folder)
 void CATALOGUE::download_CSVs(wstring year_folder)
 {
 	wstring catalogue_folder = year_folder + L"\\" + name;
-	make_folder(catalogue_folder);
+	//make_folder(catalogue_folder);
 	int scrubbed = remove_blank(catalogue_folder);
 	wcout << L"Removed " << scrubbed << L" empty files from " << name << endl;
 	vector<int> csv_indices = get_CSV_wishlist(catalogue_folder);
@@ -941,7 +981,7 @@ void CATALOGUE::download_CSVs(wstring year_folder)
 int CATALOGUE::consistency_check(wstring year)
 {
 	wstring filename, temp1;
-	int check, GID;
+	int check, GID, error;
 	int count = 0;
 	size_t pos1, pos2;
 	for (int ii = 0; ii < pages.size(); ii++)
@@ -965,19 +1005,36 @@ int CATALOGUE::consistency_check(wstring year)
 			case 2:
 				count++;
 				delete_file(filename);
-				if (pages[ii].plan_B(year, default_backup_url, name))
+				error = pages[ii].plan_B(year, default_backup_url, name);
+				if (error == 8)
 				{
-					ERR << L"File name " + filename + L" failed to pass consistency_check after re-download." << endl;
+					graveyard(year, GID);
+				}
+				else if (error > 0)
+				{
+
+					ERR << L"File name " << filename << L" failed to pass consistency_check after re-download." << endl;
 				}
 				else
 				{
-					ERR << L"File name " + filename + L" was downloaded through plan_B." << endl;
+					ERR << L"File name " << filename << L" was downloaded through plan_B." << endl;
 				}
 				break;
 			}
 		}
 	}
 	return count;
+}
+void CATALOGUE::graveyard(wstring year, int GID)
+{
+	wstring gy_filename = local_directory + L"\\" + year + L"\\" + year + L" Graveyard\\" + name + L".bin";
+	HANDLE hfile = CreateFileW(gy_filename.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hfile == INVALID_HANDLE_VALUE) { err(L"CreateFile-graveyard"); }
+	DWORD bbq = SetFilePointer(hfile, 0, NULL, FILE_END);
+	wstring gid = to_wstring(GID) + L"\r\n";
+	if (!WriteFile(hfile, gid.c_str(), gid.size() * 2, &bbq, NULL)) { err(L"WriteFile-graveyard"); }
+	if (hfile) { CloseHandle(hfile); }
+	ERR << L"Year " << year << L"  Catalogue " << name << L"  GID " << to_wstring(GID) << L" has been sent to the graveyard." << endl;
 }
 
 // Extracts pieces from a URL.  
@@ -1024,6 +1081,7 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 
 	CATALOGUE cata;
 	vector<wstring> url_redir;
+	wstring year_folder = local_directory + L"\\" + year;
 	wstring complete_webpage = webpage_memory(hrequest);
 	wstring temp1;
 	size_t pos1, pos2, pos3, pos_start, pos_stop;
@@ -1079,7 +1137,7 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 					data_map.push_back(cata);
 					catalogue_index++;
 					data_map[catalogue_index].set_name(complete_webpage, pos1);
-					data_map[catalogue_index].make_folder(year);
+					data_map[catalogue_index].make_folder(year_folder, year);
 
 					pos2 = complete_webpage.find(L'/', pos1);
 					pos3 = complete_webpage.find(L'"', pos2);
@@ -1118,7 +1176,7 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 					data_map.push_back(cata);
 					catalogue_index++;
 					data_map[catalogue_index].set_name(complete_webpage, pos1);
-					data_map[catalogue_index].make_folder(year);
+					data_map[catalogue_index].make_folder(year_folder, year);
 
 					pos2 = complete_webpage.find(L'/', pos1);
 					pos3 = complete_webpage.find(L'"', pos2);
@@ -1152,12 +1210,7 @@ void yearly_downloader(wstring year)
 	wstring object = get_object(root);
 	object.append(L"?Temporal=" + year);
 	DWORD context = 1;
-
 	wstring year_folder = local_directory + L"\\" + year;
-	if (!CreateDirectoryW(year_folder.c_str(), NULL))
-	{
-		if (GetLastError() != ERROR_ALREADY_EXISTS) { err(L"CreateDirectory"); }
-	}
 
 	hint = InternetOpenW(agent.c_str(), INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 	if (hint)
@@ -1185,6 +1238,7 @@ void yearly_downloader(wstring year)
 			{
 				wcout << L"Catalogue " << data_map[ii].get_name() << L" had " << result << L" consistency errors." << endl;
 			}
+			data_map[ii].purge_CSVs();
 		}
 	}
 
@@ -1195,7 +1249,18 @@ void yearly_downloader(wstring year)
 // Perform a variety of tasks before the main work begins.
 void initialize(wstring year)
 {
-	wstring file_name = local_directory + L"\\" + year + L"\\" + year + L" default URLs.bin";
+	wstring year_folder = local_directory + L"\\" + year;
+	if (!CreateDirectoryW(year_folder.c_str(), NULL))
+	{
+		if (GetLastError() != ERROR_ALREADY_EXISTS) { err(L"CreateDirectory-initialize"); }
+	}
+	wstring gy_folder = year_folder + L"\\" + year + L" Graveyard";
+	if (!CreateDirectoryW(gy_folder.c_str(), NULL))
+	{
+		if (GetLastError() != ERROR_ALREADY_EXISTS) { err(L"CreateDirectory-initialize"); }
+	}
+
+	wstring file_name = year_folder + L"\\" + year + L" default URLs.bin";
 	wstring cata_name;
 	HANDLE hfile = CreateFileW(file_name.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hfile == INVALID_HANDLE_VALUE) { err(L"CreateFile-initialize"); }
@@ -1227,6 +1292,6 @@ int main()
 
 	initialize(year);
 	yearly_downloader(year);
-	//download(L"www12.statcan.gc.ca/English/census91/data/tables/Rp-eng.cfm?LANG=E&APATH=3&DETAIL=1&DIM=0&FL=A&FREE=1&GC=0&GID=0&GK=0&GRP=1&PID=173&PRID=0&PTYPE=4&S=0&SHOWALL=No&SUB=0&Temporal=1991&THEME=101&VID=0&VNAMEE=&VNAMEF=", L"F:", L"1991StJohns webpage.txt");	
+	//download(L"www12.statcan.gc.ca/English/census91/data/tables/Rp-eng.cfm?TABID=2&LANG=E&APATH=3&DETAIL=1&DIM=0&FL=A&FREE=1&GC=0&GID=1110&GK=0&GRP=1&PID=86&PRID=0&PTYPE=4&S=0&SHOWALL=No&SUB=0&Temporal=1991&THEME=101&VID=0&VNAMEE=&VNAMEF=&D1=0&D2=0&D3=0&D4=0&D5=0&D6=0#tab4", L"F:", L"wtf.txt");	
 	return 0;
 }

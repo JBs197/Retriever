@@ -1,5 +1,5 @@
-# Retriever
-Program used to download large quantities of spreadsheet files from Statistics Canada. 
+# SCDA
+SCDA (Statistics Canada Data Analysis) is a project aimed at computing correlations and extrapolations in real-time, using large quantities of census data from Statistics Canada. 
 
 # Log
 [2020/11/28]
@@ -16,3 +16,9 @@ to reliably store all the desired data for later processing into a SQL database.
 
 Preliminary output suggests somewhere between 0% - 15% of Stats Canada's archived CSV files had faulty hosting 
 which would prevent a download from working, even when doing so manually through a web browser.
+
+[2020/12/06]
+Retriever will no longer hold CSV objects in memory after that CSV has gone through a consistency check. The 
+memory cost of a CSV object was minimal, but the cumulative burden was substantial after several large catalogues. 
+
+"Plan B" now  
