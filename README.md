@@ -42,3 +42,10 @@ defined by reasonable means in the current era, there is no point in downloading
 Note that, beginning with the 2011 census, Stats Canada began to host its own online map of census subsubdivisions. 
 This offers the potential to utilize the amazing articulation of the subsubdivision data, however that functionality
 is left for a future time after all the core SCDA functionality is online.
+
+[2020/12/11]
+Improved Retriever's memory management by having it delete its catalogue objects after they have been attended to
+(downloaded, checked for consistency errors, archived). When a catalogue is archived, its key data (name + template 
+URL + backup template URL) is saved in a .bin file outside of its CSV folder. All catalogues in one year are given
+one line each within a shared .bin file. 
+
