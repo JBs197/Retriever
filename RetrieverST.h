@@ -1,6 +1,8 @@
 using namespace std;
 
+bool debug = 1;
 wstring local_directory = L"F:";
+wstring error_log_path = L"F:\Error Log.txt";
 vector<wstring> search_query = { L"\0" };  // If no search term is desired, define as null wstring. 
 vector<wstring> negative_search_query = { L"Agglomeration", L"20%" };  // If no search term (to be avoided) is desired, define as null wstring.
 wstring root = L"www12.statcan.gc.ca/datasets/Index-eng.cfm";

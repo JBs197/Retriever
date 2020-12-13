@@ -14,16 +14,14 @@
 
 #pragma comment(lib, "wininet.lib")
 
-using namespace std;
+//using namespace std;
 
-wofstream ERR(L"\\Error Log.txt", ios_base::out | ios_base::app);
 vector<wstring> existing_defaults;
 vector<wstring> existing_archives;
 vector<wstring> objects;
 vector<bool> temp_ready;
 vector<int> progress = { 0, 0 };
 bool go = 1;
-bool debug = 0;
 
 typedef struct {
 	HWND       hWindow;
@@ -97,7 +95,7 @@ void err(wstring func)
 	wstring message(buffer, 512);
 	delete[] buffer;
 	wstring output = func + L" caused error " + to_wstring(num) + L": " + message;
-	ERR << output << endl;
+	wcout << output << endl;
 	exit(EXIT_FAILURE);
 }
 void warn(wstring func)
@@ -108,13 +106,13 @@ void warn(wstring func)
 	wstring message(buffer, 512);
 	delete[] buffer;
 	wstring output = func + L" caused error " + to_wstring(num) + L": " + message;
-	ERR << message << endl;
+	wcout << output << endl;
 }
 
 // Error outputs for caught exceptions. 
 void inv_arg(wstring func, invalid_argument& ia)
 {
-	ERR << func << L" caused " << ia.what() << endl;
+	wcout << func << L" caused " << ia.what() << endl;
 }
 
 // Return a string that has been decoded from the input HTML string.
@@ -149,7 +147,24 @@ wstring wdecode_HTML(wstring html)
 	return output;
 }
 
-// Removes TABs from the start, spaces and newlines from the end, and commas throughout.
+// Removes troublesome characters from strings. 
+wstring clean(wstring in)
+{
+	wstring out = in;
+	size_t pos1 = 0;
+
+	do
+	{
+		pos1 = out.find(L'|', pos1);
+		if (pos1 < out.size())
+		{
+			out.replace(pos1, 1, L"or");
+			pos1++;
+		}
+	} while (pos1 < out.size());
+
+	return out;
+}
 wstring clean_B(wstring in)
 {
 	wstring out = in;
@@ -231,7 +246,7 @@ int file_consistency(wstring filename)
 // Given a full path name, delete the file/folder.
 void delete_file(wstring filename)
 {
-	HANDLE hfile = CreateFileW(filename.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	HANDLE hfile = CreateFileW(filename.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hfile == INVALID_HANDLE_VALUE) { warn(L"CreateFile-delete_file"); }
 	if (!DeleteFileW(filename.c_str())) { warn(L"DeleteFile-delete_file"); }
 	if (!CloseHandle(hfile)) { warn(L"CloseHandle-delete_file"); }
@@ -495,7 +510,7 @@ vector<int> gid_scanner(wstring folder)
 	pos2++;
 	wstring year = folder.substr(pos2, pos1 - pos2);
 	wstring gy_filename = folder.substr(0, pos1);
-	gy_filename += L"\\" + year + L" Graveyard\\" + cata_name + L".bin";
+	gy_filename += L"\\" + year + L".Graveyard\\" + cata_name + L".bin";
 	wstring gy_list;
 	HANDLE hfile2 = CreateFileW(gy_filename.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hfile2 == INVALID_HANDLE_VALUE) 
@@ -576,6 +591,7 @@ int remove_blank(wstring folder)
 	do
 	{
 		file_name = folder + L"\\" + info.cFileName;
+		if (file_name.back() == L'.') { continue; }
 		hfile2 = CreateFileW(file_name.c_str(), 0, FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 		if (hfile2 == INVALID_HANDLE_VALUE) { warn(L"CreateFile-remove_blank"); }
 		if (!GetFileSizeEx(hfile2, &size)) { warn(L"GetFileSize-remove_blank"); }
@@ -586,6 +602,53 @@ int remove_blank(wstring folder)
 			count++;
 		}
 	} while (FindNextFileW(hfile1, &info));
+	return count;
+}
+
+// For a given folder, locate all the files with purely numerical names and delete them. 
+// Returns the number of such files deleted.
+int remove_numerical(wstring folder)
+{
+	int count;
+	wstring folder_search = folder + L"\\*";
+	WIN32_FIND_DATAW info;
+	HANDLE hfile = FindFirstFileW(folder_search.c_str(), &info);
+	wstring file_name, temp1;
+	size_t pos1, pos2;
+	vector<wstring> death_row;
+	
+	do
+	{
+		count = 0;
+		file_name = folder + L"\\" + info.cFileName;
+		if (file_name.back() == L'.') { continue; }
+		pos1 = file_name.find(L')', 0);
+		pos1 += 2;
+		pos2 = file_name.rfind(L'.', file_name.size() - 1);
+		temp1 = file_name.substr(pos1, pos2 - pos1);
+		pos1 = 0;
+		while (pos1 < temp1.size())
+		{
+			pos2 = temp1.find_first_of(L"1234567890", pos1);
+			if (pos2 < temp1.size())
+			{
+				count++;
+				pos1 = pos2 + 1;
+			}
+			else { break; }
+		}
+		if (count > 3) { death_row.push_back(file_name); }
+
+	} while (FindNextFileW(hfile, &info));
+	if (!FindClose(hfile)) { warn(L"CloseHandle-remove_numerical"); }
+
+	count = 0;
+	for (int ii = 0; ii < death_row.size(); ii++)
+	{
+		delete_file(death_row[ii]);
+		count++;
+	}
+
 	return count;
 }
 
@@ -601,6 +664,7 @@ void remove_folder(wstring year, vector<CATALOGUE>& data_map)
 	size_t pos1;
 	vector<wstring> existing_cata_folders;
 	vector<wstring> existing_cata_names;
+	int dead_numbers = 0;
 
 	do
 	{
@@ -615,10 +679,13 @@ void remove_folder(wstring year, vector<CATALOGUE>& data_map)
 	for (int ii = 0; ii < data_map.size(); ii++)
 	{
 		target_name = data_map[ii].get_name();
-		for (int jj = 0; jj < existing_cata_names.size(); jj++)
+		for (int jj = existing_cata_names.size() - 1; jj >= 0; jj--)
 		{
 			if (target_name == existing_cata_names[jj])
 			{
+				dead_numbers = remove_numerical(existing_cata_folders[jj]);
+				if (dead_numbers) { wcout << L"Removed " << dead_numbers << L" numerically-named .csv files from catalogue " << data_map[ii].get_name() << L" in " << year << L"." << endl; }
+
 				existing_cata_folders.erase(existing_cata_folders.begin() + jj);
 				existing_cata_names.erase(existing_cata_names.begin() + jj);
 				break;
@@ -890,7 +957,8 @@ int CSV::plan_B(wstring year, wstring& db_url, wstring catalogue_name)
 	file += L"\"Source:" + source_line + L"\"\r\n";
 	DWORD file_size = file.size() * 2;
 	if (!WriteFile(hfile, file.c_str(), file_size, &bytes_written, NULL)) { warn(L"WriteFile-plan_B"); return 7; }
-	
+	if (!CloseHandle(hfile)) { warn(L"CloseHandle-plan_B"); return 9; }
+
 	if (hrequest) { InternetCloseHandle(hrequest); }
 	if (hconnect) { InternetCloseHandle(hconnect); }
 	if (hint) { InternetCloseHandle(hint); }
@@ -999,9 +1067,20 @@ int CATALOGUE::check_named(wstring& webpage, size_t pos1)
 	pos2++;
 	size_t pos3 = webpage.find(L'<', pos2);
 	wstring region = webpage.substr(pos2, pos3 - pos2);
-	pos2 = region.find_first_not_of(L"1234567890");
-	if (pos2 < region.size()) { return 1; }
-	return 0;
+	int count = 0;
+	pos2 = 0;
+	while (pos2 < region.size())
+	{
+		pos3 = region.find_first_of(L"1234567890", pos2);
+		if (pos3 < region.size())
+		{
+			count++;
+			pos2 = pos3 + 1;
+		}
+		else { break; }
+	}
+	if (count > 3) { return 0; }
+	return 1;
 }
 int CATALOGUE::make_CSV()
 {
@@ -1027,7 +1106,8 @@ void CATALOGUE::set_CSV_name(int index, wstring& webpage, int pos1)
 	int pos2 = webpage.find(L'>', pos1);
 	pos2++;
 	int pos3 = webpage.find(L'<', pos2);
-	wstring region = webpage.substr(pos2, pos3 - pos2);
+	wstring temp1 = webpage.substr(pos2, pos3 - pos2);
+	wstring region = clean(temp1);
 	pages[index].set_name(region);
 }
 vector<int> CATALOGUE::get_CSV_wishlist(wstring catalogue_folder)
@@ -1077,7 +1157,7 @@ int CATALOGUE::consistency_check()
 				break;
 
 			case 1:
-				ERR << L"File name " + filename + L" failed to open during consistency_check." << endl;
+				wcout << L"File name " + filename + L" failed to open during consistency_check." << endl;
 				count++;
 				break;
 
@@ -1092,11 +1172,11 @@ int CATALOGUE::consistency_check()
 				else if (error > 0)
 				{
 
-					ERR << L"File name " << filename << L" failed to pass consistency_check after re-download." << endl;
+					wcout << L"File name " << filename << L" failed to pass consistency_check after re-download." << endl;
 				}
 				else
 				{
-					ERR << L"File name " << filename << L" was downloaded through plan_B." << endl;
+					wcout << L"File name " << filename << L" was downloaded through plan_B." << endl;
 				}
 				break;
 			}
@@ -1113,7 +1193,7 @@ void CATALOGUE::graveyard(int GID)
 	wstring gid = to_wstring(GID) + L"\r\n";
 	if (!WriteFile(hfile, gid.c_str(), gid.size() * 2, &bbq, NULL)) { err(L"WriteFile-graveyard"); }
 	if (hfile) { CloseHandle(hfile); }
-	ERR << L"Year " << year << L"  Catalogue " << name << L"  GID " << to_wstring(GID) << L" has been sent to the graveyard." << endl;
+	wcout << L"Year " << year << L"  Catalogue " << name << L"  GID " << to_wstring(GID) << L" has been sent to the graveyard." << endl;
 }
 void CATALOGUE::archive()
 {
@@ -1336,7 +1416,6 @@ void yearly_downloader(wstring year)
 	if (debug)
 	{
 		remove_folder(year, data_map);
-		exit(EXIT_SUCCESS);
 	}
 
 	progress[1] = data_map.size();
@@ -1372,7 +1451,7 @@ void initialize(wstring year)
 	{
 		if (GetLastError() != ERROR_ALREADY_EXISTS) { err(L"CreateDirectory-initialize"); }
 	}
-	wstring gy_folder = year_folder + L"\\" + year + L" Graveyard";
+	wstring gy_folder = year_folder + L"\\" + year + L".Graveyard";
 	if (!CreateDirectoryW(gy_folder.c_str(), NULL))
 	{
 		if (GetLastError() != ERROR_ALREADY_EXISTS) { err(L"CreateDirectory-initialize"); }
@@ -1380,20 +1459,7 @@ void initialize(wstring year)
 
 	wstring file_name = year_folder + L"\\" + year + L" default URLs.bin";
 	wstring cata_name;
-	/*
-	HANDLE hfile = CreateFileW(file_name.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-	if (hfile == INVALID_HANDLE_VALUE) { err(L"CreateFile-initialize"); }
-	wstring wfile = bin_memory(hfile);
-	size_t pos1 = wfile.find(L'[', 0);
-	size_t pos2;
-	while (pos1 < wfile.size())
-	{
-		pos2 = wfile.find(L']', pos1);
-		cata_name = wfile.substr(pos1 + 1, pos2 - pos1 - 1);
-		existing_defaults.push_back(cata_name);
-		pos1 = wfile.find(L'[', pos2);
-	}
-	*/
+
 	negative_search_query.push_back(L"Sortation");           // These exclusion criteria are hardcoded because
 	negative_search_query.push_back(L"Dissemination");       // their regions are named only by numeric code, 
 	negative_search_query.push_back(L"Tract");               // for which definitions are inaccessible. 
@@ -1430,6 +1496,6 @@ int main()
 
 	initialize(year);
 	yearly_downloader(year);
-	//download(L"www12.statcan.gc.ca/datasets/Index-eng.cfm?Temporal=1991", L"F:", L"1991nocsv.txt");	
+	//download(L"www12.statcan.gc.ca/English/census91/data/tables/Rp-eng.cfm?TABID=2&LANG=E&APATH=3&DETAIL=1&DIM=0&FL=A&FREE=1&GC=0&GID=2&GK=0&GRP=1&PID=120&PRID=0&PTYPE=4&S=0&SHOWALL=No&SUB=0&Temporal=1991&THEME=114&VID=0&VNAMEE=&VNAMEF=&D1=0&D2=0&D3=0&D4=0&D5=0&D6=0", L"F:", L"1991_Newf_yescsv.txt");	
 	return 0;
 }
