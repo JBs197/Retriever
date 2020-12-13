@@ -637,7 +637,16 @@ int remove_numerical(wstring folder)
 			}
 			else { break; }
 		}
-		if (count > 3) { death_row.push_back(file_name); }
+
+		if (count > 2) 
+		{
+			if (count == 3)
+			{
+				pos1 = temp1.find(L"No. ", 0);
+				if (pos1 >= temp1.size()) { death_row.push_back(file_name); }
+			}
+			else { death_row.push_back(file_name); }
+		}
 
 	} while (FindNextFileW(hfile, &info));
 	if (!FindClose(hfile)) { warn(L"CloseHandle-remove_numerical"); }
@@ -1079,7 +1088,17 @@ int CATALOGUE::check_named(wstring& webpage, size_t pos1)
 		}
 		else { break; }
 	}
-	if (count > 3) { return 0; }
+
+	if (count > 2)
+	{
+		if (count == 3)
+		{
+			pos2 = region.find(L"No. ", 0);
+			if (pos2 >= region.size()) { return 0; }
+		}
+		else { return 0; }
+	}
+
 	return 1;
 }
 int CATALOGUE::make_CSV()
