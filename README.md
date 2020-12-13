@@ -1,5 +1,5 @@
-# SCDA
-SCDA (Statistics Canada Data Analysis) is a project aimed at computing correlations and extrapolations in real-time, using large quantities of census data from Statistics Canada. 
+# Retriever
+Retriever is a program made to download large quantities of spreadsheet data from Statistics Canada, as the first step in my over-arching SCDA (Statistics Canada Data Analysis) project. SCDA is aimed at computing correlations and extrapolations in real-time, using articulated and publically-available census data . 
 
 # Log
 [2020/11/28]
