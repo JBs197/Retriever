@@ -163,6 +163,17 @@ wstring clean(wstring in)
 		}
 	} while (pos1 < out.size());
 
+	pos1 = 0;
+	do
+	{
+		pos1 = out.find(L'/', pos1);
+		if (pos1 < out.size())
+		{
+			out.replace(pos1, 1, L" or ");
+			pos1++;
+		}
+	} while (pos1 < out.size());
+
 	return out;
 }
 wstring clean_B(wstring in)
