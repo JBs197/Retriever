@@ -1,4 +1,4 @@
-#include <iostream>
+﻿#include <iostream>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -717,6 +717,93 @@ void remove_folder(wstring year, vector<CATALOGUE>& data_map)
 	{
 		delete_folder(existing_cata_folders[ii]);
 	}
+}
+
+// For a given year, check every CSV file for bad chars (typically French accents) and correct the file. 
+int replace_chars(wstring year, vector<CATALOGUE>& data_map)
+{
+	wstring year_folder = local_directory + L"\\" + year;
+	wstring year_folder_search = year_folder + L"\\*";
+	WIN32_FIND_DATAW info;
+	HANDLE hfile1 = FindFirstFileW(year_folder_search.c_str(), &info);
+	HANDLE hfile2 = INVALID_HANDLE_VALUE;
+	wstring cata_folder;
+	size_t pos1, pos2, pos3;
+	vector<wstring> cata_folders;
+
+	do
+	{
+		cata_folder = year_folder + L"\\" + info.cFileName;
+		pos1 = cata_folder.find(L'.', 0);
+		if (pos1 < cata_folder.size()) { continue; }
+		cata_folders.push_back(cata_folder);
+	} while (FindNextFileW(hfile1, &info));
+
+	vector<vector<wstring>> csv_names(cata_folders.size(), vector<wstring>());
+	wstring cata_folder_search;
+	wstring csv_name;
+	for (int ii = 0; ii < cata_folders.size(); ii++)
+	{
+		cata_folder_search = cata_folders[ii] + L"\\*.csv";
+		hfile1 = FindFirstFileW(cata_folder_search.c_str(), &info);
+		do
+		{
+			csv_name = cata_folders[ii] + L"\\" + info.cFileName;
+			if (csv_name.back() == L'.') { continue; }
+			csv_names[ii].push_back(csv_name);
+		} while (FindNextFileW(hfile1, &info));
+	}
+
+	wstring csv_file;
+	wstring cata_name;
+	wstring url;
+	wstring gid;
+	int GID;
+	int error = 0;
+	for (int ii = 0; ii < csv_names.size(); ii++)
+	{
+		for (int jj = 0; jj < csv_names[ii].size(); jj++)
+		{
+			hfile2 = CreateFileW(csv_names[ii][jj].c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+			csv_file = bin_memory(hfile2);
+			pos1 = 0;
+			pos1 = csv_file.find(L'�', 0);  // 65533
+			if (pos1 > 0 && pos1 < csv_file.size())
+			{
+				pos2 = csv_names[ii][jj].rfind(L'\\', csv_names[ii][jj].size() - 1);
+				pos2++;
+				pos3 = csv_names[ii][jj].find(L' ', pos2);
+				cata_name = csv_names[ii][jj].substr(pos2, pos3 - pos2);
+
+				pos2 = csv_names[ii][jj].find(L'(', pos3);
+				pos2++;
+				pos3 = csv_names[ii][jj].find(L')', pos2);
+				gid = csv_names[ii][jj].substr(pos2, pos3 - pos2);
+				try
+				{
+					GID = stoi(gid);
+				}
+				catch (invalid_argument& ia)
+				{
+					inv_arg(gid + L" into replace_chars", ia);
+					continue;
+				}
+
+				for (int kk = 0; kk < data_map.size(); kk++)
+				{
+					if (cata_name == data_map[kk].get_name())
+					{
+						url = data_map[kk].make_url(GID);
+						error = download(url, cata_folders[ii], csv_names[ii][jj]);
+						if (error) { warn(L"replace_chars"); }
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	return 0;
 }
 
 // CSV object functions.
@@ -1446,6 +1533,7 @@ void yearly_downloader(wstring year)
 	if (debug)
 	{
 		remove_folder(year, data_map);
+		replace_chars(year, data_map);
 	}
 
 	progress[1] = data_map.size();
@@ -1489,11 +1577,10 @@ void initialize(wstring year)
 
 	wstring file_name = year_folder + L"\\" + year + L" default URLs.bin";
 	wstring cata_name;
-
-	negative_search_query.push_back(L"Sortation");           // These exclusion criteria are hardcoded because
-	negative_search_query.push_back(L"Dissemination");       // their regions are named only by numeric code, 
-	negative_search_query.push_back(L"Tract");               // for which definitions are inaccessible. 
-	negative_search_query.push_back(L"Enumeration");
+          
+	negative_search_query.push_back(L"Dissemination");       // These exclusion criteria are hardcoded because
+	negative_search_query.push_back(L"Tract");               // their regions are named only by numeric code,
+	negative_search_query.push_back(L"Enumeration");         // for which definitions are inaccessible.
 
 	file_name = year_folder + L"\\" + year + L" archive.bin";
 	HANDLE hfile = CreateFileW(file_name.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
