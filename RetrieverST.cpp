@@ -10,6 +10,7 @@
 #include <strsafe.h>
 #include <wininet.h>
 #include <stdexcept>
+#include <locale>
 #include "RetrieverST.h"
 
 #pragma comment(lib, "wininet.lib")
@@ -147,6 +148,30 @@ wstring wdecode_HTML(wstring html)
 	return output;
 }
 
+// Text encoder conversion functions. 
+string utf16to8(wstring in)
+{
+	auto& f = use_facet<codecvt<wchar_t, char, mbstate_t>>(locale());
+	mbstate_t mb{};
+	string out(in.size() * f.max_length(), '\0');
+	const wchar_t* past;
+	char* future;
+	f.out(mb, &in[0], &in[in.size()], past, &out[0], &out[out.size()], future);
+	out.resize(future - &out[0]);
+	return out;
+}
+wstring utf8to16(string input)
+{
+	auto& f = use_facet<codecvt<wchar_t, char, mbstate_t>>(locale());
+	mbstate_t mb{};
+	wstring output(input.size() * f.max_length(), L'\0');
+	const char* past;
+	wchar_t* future;
+	f.in(mb, &input[0], &input[input.size()], past, &output[0], &output[output.size()], future);
+	output.resize(future - &output[0]);
+	return output;
+}
+
 // Removes troublesome characters from strings. 
 wstring clean(wstring in)
 {
@@ -205,7 +230,10 @@ wstring bin_memory(HANDLE& hfile)
 	DWORD size = GetFileSize(hfile, NULL);
 	DWORD bytes_read;
 	LPWSTR buffer = new WCHAR[size / 2];
-	if (!ReadFile(hfile, buffer, size, &bytes_read, NULL)) { err(L"ReadFile-bin_memory"); }
+	if (!ReadFile(hfile, buffer, size, &bytes_read, NULL)) 
+	{ 
+		err(L"ReadFile-bin_memory"); 
+	}
 	wstring bin(buffer, size / 2);
 	delete[] buffer;
 	return bin;
@@ -392,7 +420,7 @@ int download(wstring url, wstring folder, wstring filename)
 	LPSTR bufferA = new CHAR[1];
 	LPWSTR bufferW = new WCHAR[1];
 	int size1, size2;
-	wstring file;
+	string fileA;
 	DWORD ex_code;
 
 	hint = InternetOpenW(agent.c_str(), INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
@@ -424,21 +452,18 @@ int download(wstring url, wstring folder, wstring filename)
 				warn(L"InternetReadFile");
 				return 4;
 			}
-			size1 = MultiByteToWideChar(CP_UTF8, 0, bufferA, bytes_available, NULL, 0);
-			bufferW = new WCHAR[size1];
-			size2 = MultiByteToWideChar(CP_UTF8, 0, bufferA, bytes_available, bufferW, size1);
-			file.append(bufferW, size1);
+			fileA.append(bufferA, bytes_available);
 		} while (bytes_available > 0);
 		delete[] bufferA;
-		delete[] bufferW;
 	}
 	else { warn(L"HttpSendRequest"); return 5; }
 
-	HANDLE hprinter = CreateFileW(filepath.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, CREATE_NEW, 0, NULL);
+	wstring fileW = utf8to16(fileA);
+	HANDLE hprinter = CreateFileW(filepath.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, CREATE_ALWAYS, 0, NULL);
 	if (hprinter == INVALID_HANDLE_VALUE) { warn(L"CreateFile"); return 6; }
 	DWORD bytes_written;
-	DWORD file_size = file.size() * 2;
-	if (!WriteFile(hprinter, file.c_str(), file_size, &bytes_written, NULL)) { warn(L"WriteFile"); return 7; }
+	DWORD file_size = fileW.size() * 2;
+	if (!WriteFile(hprinter, fileW.c_str(), file_size, &bytes_written, NULL)) { warn(L"WriteFile"); return 7; }
 
 	if (hrequest) { InternetCloseHandle(hrequest); }
 	if (hconnect) { InternetCloseHandle(hconnect); }
@@ -748,7 +773,7 @@ int replace_chars(wstring year, vector<CATALOGUE>& data_map)
 		hfile1 = FindFirstFileW(cata_folder_search.c_str(), &info);
 		do
 		{
-			csv_name = cata_folders[ii] + L"\\" + info.cFileName;
+			csv_name = info.cFileName;
 			if (csv_name.back() == L'.') { continue; }
 			csv_names[ii].push_back(csv_name);
 		} while (FindNextFileW(hfile1, &info));
@@ -764,7 +789,8 @@ int replace_chars(wstring year, vector<CATALOGUE>& data_map)
 	{
 		for (int jj = 0; jj < csv_names[ii].size(); jj++)
 		{
-			hfile2 = CreateFileW(csv_names[ii][jj].c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+			csv_name = cata_folders[ii] + L"\\" + csv_names[ii][jj];
+			hfile2 = CreateFileW(csv_name.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 			csv_file = bin_memory(hfile2);
 			pos1 = 0;
 			pos1 = csv_file.find(L'�', 0);  // 65533
@@ -801,6 +827,7 @@ int replace_chars(wstring year, vector<CATALOGUE>& data_map)
 				}
 			}
 		}
+		wcout << cata_folders[ii] << L" completed sweeping for bad characters." << endl;
 	}
 
 	return 0;
@@ -1601,6 +1628,7 @@ void initialize(wstring year)
 int main()
 {
 	signal(SIGINT, halt);
+	setlocale(LC_ALL, ".UTF8");
 	wstring year;
 	wcout << L"Specify year to download (";
 	for (int ii = 0; ii < years.size(); ii++)
