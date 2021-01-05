@@ -49,3 +49,6 @@ Improved Retriever's memory management by having it delete its catalogue objects
 URL + backup template URL) is saved in a .bin file outside of its CSV folder. All catalogues in one year are given
 one line each within a shared .bin file. 
 
+[2021/01/04]
+Added a new function to Retriever that scans all existing CSV files for erroneous characters. These characters are typically created from bad UTF16/UTF8/ANSI conversion of French-accented letters used for many geographical locations in Canada. Sometimes, the erroneous characters have been found to originate on Stats Canada's own webpages. Correcting these faulty characters now will prevent errors later on when Database attempts to read the CSVs and organize them into SQL tables. 
+
