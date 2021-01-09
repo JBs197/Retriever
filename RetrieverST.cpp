@@ -1,4 +1,4 @@
-﻿#include <iostream>
+#include <iostream>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -68,6 +68,7 @@ public:
 	void purge_CSVs();
 	int set_CSV_gid(int, wstring&, int);
 	void set_CSV_name(int, wstring&, int);
+	wstring get_CSV_name(int);
 	vector<int> get_CSV_wishlist(wstring);
 	void download_CSVs(wstring);
 	int consistency_check();
@@ -231,8 +232,8 @@ wstring bin_memory(HANDLE& hfile)
 	DWORD bytes_read;
 	LPWSTR buffer = new WCHAR[size / 2];
 	if (!ReadFile(hfile, buffer, size, &bytes_read, NULL)) 
-	{ 
-		err(L"ReadFile-bin_memory"); 
+	{
+		err(L"ReadFile-bin_memory");
 	}
 	wstring bin(buffer, size / 2);
 	delete[] buffer;
@@ -420,7 +421,7 @@ int download(wstring url, wstring folder, wstring filename)
 	LPSTR bufferA = new CHAR[1];
 	LPWSTR bufferW = new WCHAR[1];
 	int size1, size2;
-	string fileA;
+	wstring file;
 	DWORD ex_code;
 
 	hint = InternetOpenW(agent.c_str(), INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
@@ -452,18 +453,21 @@ int download(wstring url, wstring folder, wstring filename)
 				warn(L"InternetReadFile");
 				return 4;
 			}
-			fileA.append(bufferA, bytes_available);
+			size1 = MultiByteToWideChar(CP_UTF8, 0, bufferA, bytes_available, NULL, 0);
+			bufferW = new WCHAR[size1];
+			size2 = MultiByteToWideChar(CP_UTF8, 0, bufferA, bytes_available, bufferW, size1);
+			file.append(bufferW, size1);
 		} while (bytes_available > 0);
 		delete[] bufferA;
+		delete[] bufferW;
 	}
 	else { warn(L"HttpSendRequest"); return 5; }
 
-	wstring fileW = utf8to16(fileA);
 	HANDLE hprinter = CreateFileW(filepath.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, CREATE_ALWAYS, 0, NULL);
 	if (hprinter == INVALID_HANDLE_VALUE) { warn(L"CreateFile"); return 6; }
 	DWORD bytes_written;
-	DWORD file_size = fileW.size() * 2;
-	if (!WriteFile(hprinter, fileW.c_str(), file_size, &bytes_written, NULL)) { warn(L"WriteFile"); return 7; }
+	DWORD file_size = file.size() * 2;
+	if (!WriteFile(hprinter, file.c_str(), file_size, &bytes_written, NULL)) { warn(L"WriteFile"); return 7; }
 
 	if (hrequest) { InternetCloseHandle(hrequest); }
 	if (hconnect) { InternetCloseHandle(hconnect); }
@@ -752,7 +756,7 @@ int replace_chars(wstring year, vector<CATALOGUE>& data_map)
 	WIN32_FIND_DATAW info;
 	HANDLE hfile1 = FindFirstFileW(year_folder_search.c_str(), &info);
 	HANDLE hfile2 = INVALID_HANDLE_VALUE;
-	wstring cata_folder;
+	wstring cata_folder, temp1, temp2;
 	size_t pos1, pos2, pos3;
 	vector<wstring> cata_folders;
 
@@ -767,6 +771,12 @@ int replace_chars(wstring year, vector<CATALOGUE>& data_map)
 	vector<vector<wstring>> csv_names(cata_folders.size(), vector<wstring>());
 	wstring cata_folder_search;
 	wstring csv_name;
+	wstring csv_file;
+	wstring cata_name;
+	wstring url;
+	wstring gid;
+	int GID;
+	int error = 0;
 	for (int ii = 0; ii < cata_folders.size(); ii++)
 	{
 		cata_folder_search = cata_folders[ii] + L"\\*.csv";
@@ -777,14 +787,53 @@ int replace_chars(wstring year, vector<CATALOGUE>& data_map)
 			if (csv_name.back() == L'.') { continue; }
 			csv_names[ii].push_back(csv_name);
 		} while (FindNextFileW(hfile1, &info));
+
+		for (int jj = 0; jj < csv_names[ii].size(); jj++)
+		{
+			pos1 = csv_names[ii][jj].find(L'\xfffd', 0);
+			if (pos1 > 0 && pos1 < csv_names[ii][jj].size())
+			{
+				pos2 = csv_names[ii][jj].rfind(L'\\', csv_names[ii][jj].size() - 1);
+				pos2++;
+				pos3 = csv_names[ii][jj].find(L' ', pos2);
+				cata_name = csv_names[ii][jj].substr(pos2, pos3 - pos2);
+
+				pos2 = csv_names[ii][jj].find(L'(', pos3);
+				pos2++;
+				pos3 = csv_names[ii][jj].find(L')', pos2);
+				gid = csv_names[ii][jj].substr(pos2, pos3 - pos2);
+				try
+				{
+					GID = stoi(gid);
+				}
+				catch (invalid_argument& ia)
+				{
+					inv_arg(gid + L" into replace_chars", ia);
+					continue;
+				}
+
+				for (int kk = 0; kk < data_map.size(); kk++)
+				{
+					if (cata_name == data_map[kk].get_name())
+					{
+						url = data_map[kk].make_url(GID);
+						temp1 = cata_name + L" (" + to_wstring(GID) + L") ";
+						temp1 += data_map[kk].get_CSV_name(GID);
+						temp1 += L".csv";
+						error = download(url, cata_folders[ii], temp1);
+						if (error) { warn(L"replace_chars"); }
+						else
+						{
+							temp2 = cata_folders[ii] + L"\\" + csv_names[ii][jj];
+							delete_file(temp2);
+						}
+						break;
+					}
+				}
+			}
+		}
 	}
 
-	wstring csv_file;
-	wstring cata_name;
-	wstring url;
-	wstring gid;
-	int GID;
-	int error = 0;
 	for (int ii = 0; ii < csv_names.size(); ii++)
 	{
 		for (int jj = 0; jj < csv_names[ii].size(); jj++)
@@ -793,7 +842,7 @@ int replace_chars(wstring year, vector<CATALOGUE>& data_map)
 			hfile2 = CreateFileW(csv_name.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 			csv_file = bin_memory(hfile2);
 			pos1 = 0;
-			pos1 = csv_file.find(L'�', 0);  // 65533
+			pos1 = csv_file.find(L'\xfffd', 0);  // 65533
 			if (pos1 > 0 && pos1 < csv_file.size())
 			{
 				pos2 = csv_names[ii][jj].rfind(L'\\', csv_names[ii][jj].size() - 1);
@@ -1254,6 +1303,19 @@ void CATALOGUE::set_CSV_name(int index, wstring& webpage, int pos1)
 	wstring region = clean(temp1);
 	pages[index].set_name(region);
 }
+wstring CATALOGUE::get_CSV_name(int GID)
+{
+	wstring name = L"ERROR in get_CSV_name";
+	for (int ii = 0; ii < pages.size(); ii++)
+	{
+		if (GID == pages[ii].get_GID())
+		{
+			name = pages[ii].get_name();
+			return name;
+		}
+	}
+	return name;
+}
 vector<int> CATALOGUE::get_CSV_wishlist(wstring catalogue_folder)
 {
 	vector<int> have_list = gid_scanner(catalogue_folder);
@@ -1270,7 +1332,6 @@ vector<int> CATALOGUE::get_CSV_wishlist(wstring catalogue_folder)
 void CATALOGUE::download_CSVs(wstring year_folder)
 {
 	wstring catalogue_folder = year_folder + L"\\" + name;
-	//make_folder(catalogue_folder);
 	int scrubbed = remove_blank(catalogue_folder);
 	if (scrubbed) { wcout << L"Removed " << scrubbed << L" empty files from " << name << endl; }
 	vector<int> csv_indices = get_CSV_wishlist(catalogue_folder);
@@ -1604,10 +1665,10 @@ void initialize(wstring year)
 
 	wstring file_name = year_folder + L"\\" + year + L" default URLs.bin";
 	wstring cata_name;
-          
-	negative_search_query.push_back(L"Dissemination");       // These exclusion criteria are hardcoded because
+        
+	negative_search_query.push_back(L"Dissemination");       // These exclusion criteria are hardcoded because 
 	negative_search_query.push_back(L"Tract");               // their regions are named only by numeric code,
-	negative_search_query.push_back(L"Enumeration");         // for which definitions are inaccessible.
+	negative_search_query.push_back(L"Enumeration");         // for which definitions are inaccessible. 
 
 	file_name = year_folder + L"\\" + year + L" archive.bin";
 	HANDLE hfile = CreateFileW(file_name.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -1641,6 +1702,7 @@ int main()
 
 	initialize(year);
 	yearly_downloader(year);
-	//download(L"www12.statcan.gc.ca/English/census91/data/tables/Rp-eng.cfm?TABID=2&LANG=E&APATH=3&DETAIL=1&DIM=0&FL=A&FREE=1&GC=0&GID=2&GK=0&GRP=1&PID=120&PRID=0&PTYPE=4&S=0&SHOWALL=No&SUB=0&Temporal=1991&THEME=114&VID=0&VNAMEE=&VNAMEF=&D1=0&D2=0&D3=0&D4=0&D5=0&D6=0", L"F:", L"1991_Newf_yescsv.txt");	
+	//download(L"www12.statcan.gc.ca/datasets/Index-eng.cfm?Temporal=1991", L"F:", L"1991_fucked7.txt");	
+	system("pause");
 	return 0;
 }
