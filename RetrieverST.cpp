@@ -419,9 +419,9 @@ int download(wstring url, wstring folder, wstring filename)
 	DWORD bytes_available;
 	DWORD bytes_read = 0;
 	LPSTR bufferA = new CHAR[1];
-	LPWSTR bufferW = new WCHAR[1];
 	int size1, size2;
-	wstring file;
+	string fileA;
+	wstring fileW;
 	DWORD ex_code;
 
 	hint = InternetOpenW(agent.c_str(), INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
@@ -453,21 +453,18 @@ int download(wstring url, wstring folder, wstring filename)
 				warn(L"InternetReadFile");
 				return 4;
 			}
-			size1 = MultiByteToWideChar(CP_UTF8, 0, bufferA, bytes_available, NULL, 0);
-			bufferW = new WCHAR[size1];
-			size2 = MultiByteToWideChar(CP_UTF8, 0, bufferA, bytes_available, bufferW, size1);
-			file.append(bufferW, size1);
+			fileA.append(bufferA, bytes_available);
 		} while (bytes_available > 0);
 		delete[] bufferA;
-		delete[] bufferW;
 	}
 	else { warn(L"HttpSendRequest"); return 5; }
+	fileW = utf8to16(fileA);
 
 	HANDLE hprinter = CreateFileW(filepath.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, CREATE_ALWAYS, 0, NULL);
 	if (hprinter == INVALID_HANDLE_VALUE) { warn(L"CreateFile"); return 6; }
 	DWORD bytes_written;
-	DWORD file_size = file.size() * 2;
-	if (!WriteFile(hprinter, file.c_str(), file_size, &bytes_written, NULL)) { warn(L"WriteFile"); return 7; }
+	DWORD file_size = fileW.size() * 2;
+	if (!WriteFile(hprinter, fileW.c_str(), file_size, &bytes_written, NULL)) { warn(L"WriteFile"); return 7; }
 
 	if (hrequest) { InternetCloseHandle(hrequest); }
 	if (hconnect) { InternetCloseHandle(hconnect); }
@@ -777,6 +774,8 @@ int replace_chars(wstring year, vector<CATALOGUE>& data_map)
 	wstring gid;
 	int GID;
 	int error = 0;
+	wstring stored_cata_name;
+
 	for (int ii = 0; ii < cata_folders.size(); ii++)
 	{
 		cata_folder_search = cata_folders[ii] + L"\\*.csv";
@@ -814,7 +813,8 @@ int replace_chars(wstring year, vector<CATALOGUE>& data_map)
 
 				for (int kk = 0; kk < data_map.size(); kk++)
 				{
-					if (cata_name == data_map[kk].get_name())
+					stored_cata_name = data_map[kk].get_name();
+					if (cata_name == stored_cata_name)
 					{
 						url = data_map[kk].make_url(GID);
 						temp1 = cata_name + L" (" + to_wstring(GID) + L") ";
@@ -826,6 +826,8 @@ int replace_chars(wstring year, vector<CATALOGUE>& data_map)
 						{
 							temp2 = cata_folders[ii] + L"\\" + csv_names[ii][jj];
 							delete_file(temp2);
+							csv_names[ii].erase(csv_names[ii].begin() + jj);
+							jj--;
 						}
 						break;
 					}
@@ -866,7 +868,8 @@ int replace_chars(wstring year, vector<CATALOGUE>& data_map)
 
 				for (int kk = 0; kk < data_map.size(); kk++)
 				{
-					if (cata_name == data_map[kk].get_name())
+					stored_cata_name = data_map[kk].get_name();
+					if (cata_name == stored_cata_name)
 					{
 						url = data_map[kk].make_url(GID);
 						error = download(url, cata_folders[ii], csv_names[ii][jj]);
@@ -878,7 +881,6 @@ int replace_chars(wstring year, vector<CATALOGUE>& data_map)
 		}
 		wcout << cata_folders[ii] << L" completed sweeping for bad characters." << endl;
 	}
-
 	return 0;
 }
 
@@ -1620,7 +1622,7 @@ void yearly_downloader(wstring year)
 
 	if (debug)
 	{
-		remove_folder(year, data_map);
+		//remove_folder(year, data_map);
 		replace_chars(year, data_map);
 	}
 
@@ -1706,3 +1708,88 @@ int main()
 	system("pause");
 	return 0;
 }
+
+/*
+int download(wstring url, wstring folder, wstring filename)
+{
+	wstring filepath = folder + L"\\" + filename;
+	wstring server_name;
+	wstring object_name;
+	size_t cut_here;
+	for (int ii = 0; ii < domains.size(); ii++)
+	{
+		cut_here = url.rfind(domains[ii]);
+		if (cut_here <= url.size())
+		{
+			server_name = url.substr(0, cut_here + domains[ii].size());
+			object_name = url.substr(cut_here + domains[ii].size(), url.size() - cut_here - domains[ii].size());
+			break;
+		}
+	}
+
+	INTERNET_STATUS_CALLBACK InternetStatusCallback;
+	DWORD context = 1;
+	BOOL yesno = 0;
+	wstring agent = L"downloader";
+	HINTERNET hint = NULL;
+	HINTERNET hconnect = NULL;
+	HINTERNET hrequest = NULL;
+	DWORD bytes_available;
+	DWORD bytes_read = 0;
+	LPSTR bufferA = new CHAR[1];
+	LPWSTR bufferW = new WCHAR[1];
+	int size1, size2;
+	wstring file;
+	DWORD ex_code;
+
+	hint = InternetOpenW(agent.c_str(), INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+	if (hint)
+	{
+		InternetStatusCallback = InternetSetStatusCallback(hint, (INTERNET_STATUS_CALLBACK)call);
+		hconnect = InternetConnectW(hint, server_name.c_str(), INTERNET_DEFAULT_HTTP_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, context);
+	}
+	else { warn(L"InternetOpen"); return 1; }
+	if (hconnect)
+	{
+		hrequest = HttpOpenRequestW(hconnect, NULL, object_name.c_str(), NULL, NULL, NULL, 0, context);
+	}
+	else { warn(L"InternetConnect"); return 2; }
+	if (hrequest)
+	{
+		yesno = HttpSendRequest(hrequest, NULL, 0, NULL, 0);
+	}
+	else { warn(L"HttpOpenRequest"); return 3; }
+	if (yesno)
+	{
+		do
+		{
+			bytes_available = 0;
+			InternetQueryDataAvailable(hrequest, &bytes_available, 0, 0);
+			bufferA = new CHAR[bytes_available];
+			if (!InternetReadFile(hrequest, (LPVOID)bufferA, bytes_available, &bytes_read))
+			{
+				warn(L"InternetReadFile");
+				return 4;
+			}
+			size1 = MultiByteToWideChar(CP_UTF8, 0, bufferA, bytes_available, NULL, 0);
+			bufferW = new WCHAR[size1];
+			size2 = MultiByteToWideChar(CP_UTF8, 0, bufferA, bytes_available, bufferW, size1);
+			file.append(bufferW, size1);
+		} while (bytes_available > 0);
+		delete[] bufferA;
+		delete[] bufferW;
+	}
+	else { warn(L"HttpSendRequest"); return 5; }
+
+	HANDLE hprinter = CreateFileW(filepath.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, CREATE_ALWAYS, 0, NULL);
+	if (hprinter == INVALID_HANDLE_VALUE) { warn(L"CreateFile"); return 6; }
+	DWORD bytes_written;
+	DWORD file_size = file.size() * 2;
+	if (!WriteFile(hprinter, file.c_str(), file_size, &bytes_written, NULL)) { warn(L"WriteFile"); return 7; }
+
+	if (hrequest) { InternetCloseHandle(hrequest); }
+	if (hconnect) { InternetCloseHandle(hconnect); }
+	if (hint) { InternetCloseHandle(hint); }
+	return 0;
+}
+*/
