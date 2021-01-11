@@ -1622,7 +1622,7 @@ void yearly_downloader(wstring year)
 
 	if (debug)
 	{
-		//remove_folder(year, data_map);
+		remove_folder(year, data_map);
 		replace_chars(year, data_map);
 	}
 

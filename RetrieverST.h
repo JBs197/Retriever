@@ -1,6 +1,6 @@
 using namespace std;
 
-bool debug = 1;
+bool debug = 0;
 wstring local_directory = L"F:";
 wstring error_log_path = L"F:\Error Log.txt";
 vector<wstring> search_query = { L"\0" };  // If no search term is desired, define as null wstring. 
