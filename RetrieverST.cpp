@@ -418,11 +418,10 @@ int download(wstring url, wstring folder, wstring filename)
 	HINTERNET hrequest = NULL;
 	DWORD bytes_available;
 	DWORD bytes_read = 0;
-	LPSTR bufferA = new CHAR[1];
+	unsigned char* ubufferA = new unsigned char[1];
 	int size1, size2;
-	string fileA;
 	wstring fileW;
-	DWORD ex_code;
+	bool special_char = 0;
 
 	hint = InternetOpenW(agent.c_str(), INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 	if (hint)
@@ -447,18 +446,30 @@ int download(wstring url, wstring folder, wstring filename)
 		{
 			bytes_available = 0;
 			InternetQueryDataAvailable(hrequest, &bytes_available, 0, 0);
-			bufferA = new CHAR[bytes_available];
-			if (!InternetReadFile(hrequest, (LPVOID)bufferA, bytes_available, &bytes_read))
+			ubufferA = new unsigned char[bytes_available];
+			if (!InternetReadFile(hrequest, ubufferA, bytes_available, &bytes_read))
 			{
 				warn(L"InternetReadFile");
 				return 4;
 			}
-			fileA.append(bufferA, bytes_available);
+			for (int ii = 0; ii < bytes_available; ii++)
+			{
+				fileW.push_back((wchar_t)ubufferA[ii]);
+				if (fileW.back() == L'\x00C3' && !special_char)
+				{
+					special_char = 1;
+				}
+				else if (special_char)
+				{
+					fileW[fileW.size() - 2] = fileW[fileW.size() - 1] + 64;
+					fileW.pop_back();
+					special_char = 0;
+				}
+			}
 		} while (bytes_available > 0);
-		delete[] bufferA;
+		delete[] ubufferA;
 	}
 	else { warn(L"HttpSendRequest"); return 5; }
-	fileW = utf8to16(fileA);
 
 	HANDLE hprinter = CreateFileW(filepath.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, CREATE_ALWAYS, 0, NULL);
 	if (hprinter == INVALID_HANDLE_VALUE) { warn(L"CreateFile"); return 6; }
@@ -1467,11 +1478,14 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 	}
 	else { err(L"HttpOpenRequest"); }
 
-	if (objects.size() > 0) { object = objects[objects.size() - 1]; }
+	if (objects.size() > 0) 
+	{
+		object = objects[objects.size() - 1];
+	}
 	objects.clear();
 
 	CATALOGUE cata(year);
-	vector<wstring> url_redir;
+	vector<vector<wstring>> url_redir(2, vector<wstring>());
 	wstring year_folder = local_directory + L"\\" + year;
 	wstring complete_webpage = webpage_memory(hrequest);
 	wstring temp1;
@@ -1504,82 +1518,53 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 			}
 		}
 	}
-	/* else if (search_query[0] != L"\0")
-	{
-		yesno = 0;
-		pos_start = complete_webpage.find(L"<tbody>", 0);
-		pos_stop = complete_webpage.rfind(L"</tbody>", complete_webpage.size() - 10);
-		pos1 = pos_start + 1;
-		while (pos1 > pos_start && pos1 < pos_stop)
-		{
-			pos1 = complete_webpage.find(L"HTML ", pos1 + 1);
-			if (pos1 > pos_stop) { break; }
-			pos2 = complete_webpage.rfind(L"<td>", pos1);
-			temp1 = complete_webpage.substr(pos2, pos1 - pos2);
-			pos3 = 0;
-			for (int ii = 0; ii < search_query.size(); ii++)
-			{
-				pos3 = temp1.find(search_query[ii], 0);
-				if (pos3 > 0 && pos3 < temp1.size()) { yesno = 1; }
-			}
-			if (yesno)
-			{
-				if (pos1 < complete_webpage.size())
-				{
-					data_map.push_back(cata);
-					catalogue_index++;
-					data_map[catalogue_index].set_name(complete_webpage, pos1);
-					data_map[catalogue_index].make_folder(year_folder, year);
-
-					pos2 = complete_webpage.find(L'/', pos1);
-					pos3 = complete_webpage.find(L'"', pos2);
-					temp1 = complete_webpage.substr(pos2, pos3 - pos2);
-					url_redir.push_back(temp1);
-				}
-			}
-		}
-		for (int ii = 0; ii < url_redir.size(); ii++)
-		{
-			navigator(hconnect, server, url_redir[ii], data_map, ii, year);
-		}
-	} */
 	else
 	{
-		pos_start = complete_webpage.find(L"<tbody>", 0);
-		pos_stop = complete_webpage.rfind(L"</tbody>", complete_webpage.size() - 10);
-		pos1 = pos_start + 1;
-		while (pos1 > pos_start && pos1 < pos_stop)
-		{
-			yesno = 0;
-			pos1 = complete_webpage.find(L"HTML ", pos1 + 1);
-			if (pos1 > pos_stop) { break; }
-			pos2 = complete_webpage.rfind(L"<td>", pos1);
-			temp1 = complete_webpage.substr(pos2, pos1 - pos2);
-			pos3 = 0;
-			for (int ii = 0; ii < negative_search_query.size(); ii++)
-			{
-				pos3 = temp1.find(negative_search_query[ii], 0);
-				if (pos3 > 0 && pos3 < temp1.size()) { yesno = 1; }
-			}
-			if (!yesno)
-			{
-				if (pos1 < complete_webpage.size())
-				{
-					data_map.push_back(cata);
-					catalogue_index++;
-					data_map[catalogue_index].set_name(complete_webpage, pos1);
-					data_map[catalogue_index].make_folder(year_folder);
+		pos2 = 0;
+		pos2 = complete_webpage.find(L"Download", 0);
 
-					pos2 = complete_webpage.find(L'/', pos1);
-					pos3 = complete_webpage.find(L'"', pos2);
-					temp1 = complete_webpage.substr(pos2, pos3 - pos2);
-					url_redir.push_back(temp1);
+		if (pos2 < complete_webpage.size())
+		{
+
+		}
+		else
+		{
+			pos_start = complete_webpage.find(L"<tbody>", 0);
+			pos_stop = complete_webpage.rfind(L"</tbody>", complete_webpage.size() - 10);
+			pos1 = pos_start + 1;
+			while (pos1 > pos_start && pos1 < pos_stop)
+			{
+				yesno = 0;
+				pos1 = complete_webpage.find(L"HTML ", pos1 + 1);
+				if (pos1 > pos_stop) { break; }
+				pos2 = complete_webpage.rfind(L"<td>", pos1);
+				temp1 = complete_webpage.substr(pos2, pos1 - pos2);
+				pos3 = 0;
+				for (int ii = 0; ii < negative_search_query.size(); ii++)
+				{
+					pos3 = temp1.find(negative_search_query[ii], 0);
+					if (pos3 > 0 && pos3 < temp1.size()) { yesno = 1; }
+				}
+				if (!yesno)
+				{
+					if (pos1 < complete_webpage.size())
+					{
+						data_map.push_back(cata);
+						catalogue_index++;
+						data_map[catalogue_index].set_name(complete_webpage, pos1);
+						data_map[catalogue_index].make_folder(year_folder);
+
+						pos2 = complete_webpage.find(L'/', pos1);
+						pos3 = complete_webpage.find(L'"', pos2);
+						temp1 = complete_webpage.substr(pos2, pos3 - pos2);
+						url_redir[0].push_back(temp1);
+					}
 				}
 			}
-		}
-		for (int ii = 0; ii < url_redir.size(); ii++)
-		{
-			navigator(hconnect, server, url_redir[ii], data_map, ii, year);
+			for (int ii = 0; ii < url_redir.size(); ii++)
+			{
+				navigator(hconnect, server, url_redir[0][ii], data_map, ii, year);
+			}
 		}
 	}
 }
@@ -1703,8 +1688,8 @@ int main()
 	wcin >> year;
 
 	initialize(year);
-	yearly_downloader(year);
-	//download(L"www12.statcan.gc.ca/datasets/Index-eng.cfm?Temporal=1991", L"F:", L"1991_fucked7.txt");	
+	//yearly_downloader(year);
+	download(L"www12.statcan.gc.ca/global/URLRedirect.cfm?lang=E&ips=98-311-XCB2011023", L"F:", L"2011nocsv.txt");	
 	system("pause");
 	return 0;
 }
@@ -1786,6 +1771,89 @@ int download(wstring url, wstring folder, wstring filename)
 	DWORD bytes_written;
 	DWORD file_size = file.size() * 2;
 	if (!WriteFile(hprinter, file.c_str(), file_size, &bytes_written, NULL)) { warn(L"WriteFile"); return 7; }
+
+	if (hrequest) { InternetCloseHandle(hrequest); }
+	if (hconnect) { InternetCloseHandle(hconnect); }
+	if (hint) { InternetCloseHandle(hint); }
+	return 0;
+}
+*/
+
+/*
+int download(wstring url, wstring folder, wstring filename)
+{
+	wstring filepath = folder + L"\\" + filename;
+	wstring server_name;
+	wstring object_name;
+	size_t cut_here;
+	for (int ii = 0; ii < domains.size(); ii++)
+	{
+		cut_here = url.rfind(domains[ii]);
+		if (cut_here <= url.size())
+		{
+			server_name = url.substr(0, cut_here + domains[ii].size());
+			object_name = url.substr(cut_here + domains[ii].size(), url.size() - cut_here - domains[ii].size());
+			break;
+		}
+	}
+
+	INTERNET_STATUS_CALLBACK InternetStatusCallback;
+	DWORD context = 1;
+	BOOL yesno = 0;
+	wstring agent = L"downloader";
+	HINTERNET hint = NULL;
+	HINTERNET hconnect = NULL;
+	HINTERNET hrequest = NULL;
+	DWORD bytes_available;
+	DWORD bytes_read = 0;
+	LPSTR bufferA = new CHAR[1];
+	LPINTERNET_BUFFERSW bufferW;
+	int size1, size2;
+	string fileA;
+	wstring fileW;
+	DWORD ex_code;
+
+	hint = InternetOpenW(agent.c_str(), INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+	if (hint)
+	{
+		InternetStatusCallback = InternetSetStatusCallback(hint, (INTERNET_STATUS_CALLBACK)call);
+		hconnect = InternetConnectW(hint, server_name.c_str(), INTERNET_DEFAULT_HTTP_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, context);
+	}
+	else { warn(L"InternetOpen"); return 1; }
+	if (hconnect)
+	{
+		hrequest = HttpOpenRequestW(hconnect, NULL, object_name.c_str(), NULL, NULL, NULL, 0, context);
+	}
+	else { warn(L"InternetConnect"); return 2; }
+	if (hrequest)
+	{
+		yesno = HttpSendRequest(hrequest, NULL, 0, NULL, 0);
+	}
+	else { warn(L"HttpOpenRequest"); return 3; }
+	if (yesno)
+	{
+		do
+		{
+			bytes_available = 0;
+			InternetQueryDataAvailable(hrequest, &bytes_available, 0, 0);
+			bufferA = new CHAR[bytes_available];
+			if (!InternetReadFile(hrequest, bufferA, bytes_available, &bytes_read))
+			{
+				warn(L"InternetReadFile");
+				return 4;
+			}
+			fileA.append(bufferA, bytes_available);
+		} while (bytes_available > 0);
+		delete[] bufferA;
+	}
+	else { warn(L"HttpSendRequest"); return 5; }
+	fileW = utf8to16(fileA);
+
+	HANDLE hprinter = CreateFileW(filepath.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, CREATE_ALWAYS, 0, NULL);
+	if (hprinter == INVALID_HANDLE_VALUE) { warn(L"CreateFile"); return 6; }
+	DWORD bytes_written;
+	DWORD file_size = fileW.size() * 2;
+	if (!WriteFile(hprinter, fileW.c_str(), file_size, &bytes_written, NULL)) { warn(L"WriteFile"); return 7; }
 
 	if (hrequest) { InternetCloseHandle(hrequest); }
 	if (hconnect) { InternetCloseHandle(hconnect); }
