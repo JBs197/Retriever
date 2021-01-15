@@ -62,9 +62,11 @@ public:
 	void make_folder(wstring&);
 	bool check_default();
 	void set_default_url(wstring&, wstring, wstring);
+	void set_default_backup_url(wstring dbu) { default_backup_url = dbu; }
 	wstring make_url(int);
 	int check_named(wstring&, size_t);
 	int make_CSV();
+	int get_pages_size() { return pages.size(); }
 	void purge_CSVs();
 	int set_CSV_gid(int, wstring&, int);
 	void set_CSV_name(int, wstring&, int);
@@ -1211,7 +1213,7 @@ void CATALOGUE::set_default_url(wstring& webpage, wstring server, wstring object
 	pos1 = object.rfind(L'/');
 	wstring temp2 = object.substr(0, pos1 + 1);
 	default_url = wdecode_HTML(server + temp2 + temp1);
-	default_backup_url = server + object;
+	if (default_backup_url.size() < 1) { default_backup_url = server + object; }
 
 	/*
 	bool found = 0;
@@ -1485,10 +1487,10 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 	objects.clear();
 
 	CATALOGUE cata(year);
-	vector<vector<wstring>> url_redir(2, vector<wstring>());
+	vector<wstring> url_redir;
 	wstring year_folder = local_directory + L"\\" + year;
 	wstring complete_webpage = webpage_memory(hrequest);
-	wstring temp1;
+	wstring temp1, temp2, url_midway;
 	size_t pos1, pos2, pos3, pos_start, pos_stop;
 	int csv_index;
 
@@ -1502,19 +1504,22 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 			data_map[catalogue_index].set_default_url(complete_webpage, server, object);
 		}
 
-		pos_start = complete_webpage.find(L"\"GID\"", 0);
-		pos_stop = complete_webpage.find(L"</select>", pos_start);
-
-		pos1 = pos_start + 1;
-		while (pos1 > pos_start && pos1 < pos_stop)
+		if (data_map[catalogue_index].get_pages_size() < 1)
 		{
-			pos1 = complete_webpage.find(L"value=", pos1 + 1);
-			if (pos1 < pos_stop)
+			pos_start = complete_webpage.find(L"\"GID\"", 0);
+			pos_stop = complete_webpage.find(L"</select>", pos_start);
+
+			pos1 = pos_start + 1;
+			while (pos1 > pos_start && pos1 < pos_stop)
 			{
-				if (!data_map[catalogue_index].check_named(complete_webpage, pos1)) { continue; }
-				csv_index = data_map[catalogue_index].make_CSV();
-				if (data_map[catalogue_index].set_CSV_gid(csv_index, complete_webpage, pos1)) { continue; }
-				data_map[catalogue_index].set_CSV_name(csv_index, complete_webpage, pos1);
+				pos1 = complete_webpage.find(L"value=", pos1 + 1);
+				if (pos1 < pos_stop)
+				{
+					if (!data_map[catalogue_index].check_named(complete_webpage, pos1)) { continue; }
+					csv_index = data_map[catalogue_index].make_CSV();
+					if (data_map[catalogue_index].set_CSV_gid(csv_index, complete_webpage, pos1)) { continue; }
+					data_map[catalogue_index].set_CSV_name(csv_index, complete_webpage, pos1);
+				}
 			}
 		}
 	}
@@ -1525,7 +1530,35 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 
 		if (pos2 < complete_webpage.size())
 		{
+			temp1 = server + object;
+			data_map[catalogue_index].set_default_backup_url(temp1);
 
+			pos1 = complete_webpage.find(L"href=", pos2);
+			pos1 += 6;
+			pos3 = complete_webpage.find(L'"', pos1);
+			temp1 = complete_webpage.substr(pos1, pos3 - pos1);
+			temp2 = wdecode_HTML(temp1);
+
+			pos1 = object.rfind(L'/', object.size() - 1);
+			temp1 = object.substr(0, pos1 + 1);
+			url_midway = temp1 + temp2;
+
+			pos_start = complete_webpage.find(L"\"GID\"", 0);
+			pos_stop = complete_webpage.find(L"</select>", pos_start);
+			pos1 = pos_start + 1;
+			while (pos1 > pos_start && pos1 < pos_stop)
+			{
+				pos1 = complete_webpage.find(L"value=", pos1 + 1);
+				if (pos1 < pos_stop)
+				{
+					if (!data_map[catalogue_index].check_named(complete_webpage, pos1)) { continue; }
+					csv_index = data_map[catalogue_index].make_CSV();
+					if (data_map[catalogue_index].set_CSV_gid(csv_index, complete_webpage, pos1)) { continue; }
+					data_map[catalogue_index].set_CSV_name(csv_index, complete_webpage, pos1);
+				}
+			}
+
+			navigator(hconnect, server, url_midway, data_map, catalogue_index, year);
 		}
 		else
 		{
@@ -1557,13 +1590,13 @@ void navigator(HINTERNET& hconnect, wstring server, wstring object, vector<CATAL
 						pos2 = complete_webpage.find(L'/', pos1);
 						pos3 = complete_webpage.find(L'"', pos2);
 						temp1 = complete_webpage.substr(pos2, pos3 - pos2);
-						url_redir[0].push_back(temp1);
+						url_redir.push_back(temp1);
 					}
 				}
 			}
 			for (int ii = 0; ii < url_redir.size(); ii++)
 			{
-				navigator(hconnect, server, url_redir[0][ii], data_map, ii, year);
+				navigator(hconnect, server, url_redir[ii], data_map, ii, year);
 			}
 		}
 	}
@@ -1688,8 +1721,8 @@ int main()
 	wcin >> year;
 
 	initialize(year);
-	//yearly_downloader(year);
-	download(L"www12.statcan.gc.ca/global/URLRedirect.cfm?lang=E&ips=98-311-XCB2011023", L"F:", L"2011nocsv.txt");	
+	yearly_downloader(year);
+	//download(L"www12.statcan.gc.ca/global/URLRedirect.cfm?lang=E&ips=98-311-XCB2011023", L"F:", L"2011nocsv.txt");	
 	system("pause");
 	return 0;
 }
