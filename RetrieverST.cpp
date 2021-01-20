@@ -1207,8 +1207,18 @@ void CATALOGUE::set_default_url(wstring& webpage, wstring server, wstring object
 {
 	size_t pos1 = webpage.rfind(L"OFT=CSV");
 	pos1 += 7;
-	size_t pos2 = webpage.rfind(L"File.cfm", pos1);
+	size_t pos2 = webpage.rfind(L"href=", pos1);
+	pos2 += 6;
 	wstring	temp1 = webpage.substr(pos2, pos1 - pos2);
+	pos1 = temp1.find(L"File", 0);
+	if (pos1 >= temp1.size())
+	{
+		pos1 = webpage.rfind(L"OFT=CSV", pos2);
+		pos1 += 7;
+		pos2 = webpage.rfind(L"href=", pos1);
+		pos2 += 6;
+		temp1 = webpage.substr(pos2, pos1 - pos2);
+	}
 
 	pos1 = object.rfind(L'/');
 	wstring temp2 = object.substr(0, pos1 + 1);
