@@ -226,6 +226,15 @@ wstring clean_B(wstring in)
 	}
 	return out;
 }
+void clean_url(wstring& url)
+{
+	size_t pos1 = url.find(L"&amp;");
+	while (pos1 < url.size())
+	{
+		url.replace(pos1, 5, L"&");
+		pos1 = url.find(L"&amp;", pos1);
+	}
+}
 
 // Read into memory a (local .bin file / webpage).
 wstring bin_memory(HANDLE& hfile)
@@ -270,6 +279,18 @@ wstring webpage_memory(HINTERNET& hrequest)
 	delete[] bufferW;
 
 	return webpage;
+}
+wstring w_memory(wstring& full_path)
+{
+	HANDLE hfile = CreateFileW(full_path.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, OPEN_EXISTING, 0, NULL);
+	if (hfile == INVALID_HANDLE_VALUE) { err(L"CreateFile-w_memory"); }
+	DWORD size = GetFileSize(hfile, NULL);
+	DWORD bytes_read;
+	LPWSTR buffer = new WCHAR[size / 2];
+	if (!ReadFile(hfile, buffer, size, &bytes_read, NULL)) { err(L"ReadFile-w_memory"); }
+	wstring wfile(buffer, size / 2);
+	delete[] buffer;
+	return wfile;
 }
 
 // Open a file, and check for erroneous content (rather than data) within. 
@@ -1716,10 +1737,278 @@ void initialize(wstring year)
 	if (!CloseHandle(hfile)) { warn(L"CloseHandle-initialize"); }
 }
 
+// Given a root folder path, return a vector containing the full paths of all subfolders within.
+vector<wstring> get_subfolders(wstring root_folder)
+{
+	vector<wstring> subfolders;
+	wstring folder_name;
+	wstring folder_search = root_folder + L"\\*";
+	size_t pos1;
+	WIN32_FIND_DATAW info;
+	HANDLE hfile1 = FindFirstFileW(folder_search.c_str(), &info);
+	if (hfile1 == INVALID_HANDLE_VALUE) { err(L"FindFirstFile-get_subfolders"); }
+	do
+	{
+		folder_name = root_folder + L"\\" + info.cFileName;
+		pos1 = folder_name.find(L'.', 0);
+		if (pos1 < folder_name.size()) { continue; }
+		else
+		{
+			subfolders.push_back(folder_name);
+		}
+	} while (FindNextFileW(hfile1, &info));
+	if (!FindClose(hfile1)) { err(L"FindClose-get_subfolders"); }
+
+	for (int ii = (int)subfolders.size() - 1; ii >= 0; ii--)
+	{
+		pos1 = subfolders[ii].find(L"System Volume Information", 0);
+		if (pos1 < subfolders[ii].size())
+		{
+			subfolders.erase(subfolders.begin() + ii);
+		}
+	}
+
+	return subfolders;
+}
+vector<vector<wstring>> get_subfolders2(wstring root_folder)
+{
+	vector<vector<wstring>> subfolders2;
+	vector<wstring> subfolders_temp;
+	vector<wstring> subfolders1 = get_subfolders(root_folder);
+
+	for (size_t ii = 0; ii < subfolders1.size(); ii++)
+	{
+		subfolders_temp = get_subfolders(subfolders1[ii]);
+		subfolders2.push_back(subfolders_temp);
+	}
+
+	return subfolders2;
+}
+
+// Geolist functions, used to determine Stats Canada's tree structure for regions. 
+void download_geolists(wstring year_folder)
+{
+	// Determine which catalogues are locally stored in the given year folder.
+	wstring temp1, temp2;
+	size_t pos1, pos2, pos3;
+	int iyear;
+	vector<wstring> cata_folders = get_subfolders(year_folder);
+	vector<wstring> cata_names;
+	for (int ii = 0; ii < cata_folders.size(); ii++)
+	{
+		pos1 = cata_folders[ii].rfind(L"\\");
+		temp1 = cata_folders[ii].substr(pos1 + 1);
+		cata_names.push_back(temp1);
+	}
+	pos1 = year_folder.rfind(L"\\");
+	wstring wyear = year_folder.substr(pos1 + 1);
+	
+	// Connect to Stats Can, and obtain the given year's catalogue webpage. 
+	HINTERNET hint = NULL;
+	HINTERNET hconnect = NULL;
+	HINTERNET hrequest = NULL;
+	wstring agent = L"GeoLister";
+	INTERNET_STATUS_CALLBACK isc;
+	BOOL yesno = 0;
+	wstring server = get_server(root);
+	wstring object = get_object(root);
+	object.append(L"?Temporal=" + wyear);
+	DWORD context = 1;
+	hint = InternetOpenW(agent.c_str(), INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+	if (hint)
+	{
+		InternetSetStatusCallbackW(hint, (INTERNET_STATUS_CALLBACK)call);
+		hconnect = InternetConnectW(hint, server.c_str(), INTERNET_DEFAULT_HTTP_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, context);
+	}
+	else { err(L"InternetOpen"); }
+	if (hconnect)
+	{
+		hrequest = HttpOpenRequestW(hconnect, NULL, object.c_str(), NULL, NULL, NULL, NULL, 1);
+	}
+	else { err(L"InternetConnect"); }
+	if (hrequest)
+	{
+		if (!HttpSendRequestW(hrequest, NULL, 0, NULL, 0)) { err(L"HttpSendRequest"); }
+	}
+	else { err(L"HttpOpenRequest"); }
+	wstring complete_webpage = webpage_memory(hrequest);
+
+	// Obtain a list of URL redirects, one for each catalogue desired.
+	vector<wstring> url_redir, cata_url_names;
+	size_t pos_start = complete_webpage.find(L"<tbody>", 0);
+	size_t pos_stop = complete_webpage.rfind(L"</tbody>", complete_webpage.size() - 10);
+	pos1 = pos_start + 1;
+	while (pos1 > pos_start && pos1 < pos_stop)
+	{
+		yesno = 0;
+		pos1 = complete_webpage.find(L"HTML ", pos1 + 1);
+		if (pos1 > pos_stop) { break; }
+		pos2 = complete_webpage.rfind(L"Dataset ", pos1);
+		pos2 += 8;
+		pos3 = complete_webpage.find(L' ', pos2);
+		temp1 = complete_webpage.substr(pos2, pos3 - pos2);
+		for (int ii = 0; ii < cata_names.size(); ii++)
+		{
+			if (temp1 == cata_names[ii])
+			{
+				pos2 = complete_webpage.find(L"href=", pos1);
+				pos2 = complete_webpage.find(L'"', pos2 + 4);
+				pos3 = complete_webpage.find(L'"', pos2 + 1);
+				temp2 = complete_webpage.substr(pos2 + 1, pos3 - pos2 - 1);
+				url_redir.push_back(temp2);
+				cata_url_names.push_back(cata_names[ii]);
+				break;
+			}
+		}
+	}
+
+	// Travel to each catalogue's own page, then to its geo index page, then download into each catalogue folder.
+	wstring url_midway, url_final;
+	int error;
+	for (int ii = 0; ii < url_redir.size(); ii++)
+	{
+		hrequest = HttpOpenRequestW(hconnect, NULL, url_redir[ii].c_str(), NULL, NULL, NULL, NULL, 1);
+		if (hrequest)
+		{
+			if (!HttpSendRequestW(hrequest, NULL, 0, NULL, 0)) { err(L"HttpSendRequest"); }
+		}
+		else { err(L"HttpOpenRequest"); }
+		if (objects.size() > 0)
+		{
+			url_midway = objects[objects.size() - 1];
+		}
+		objects.clear();
+		complete_webpage = webpage_memory(hrequest);
+
+		pos1 = complete_webpage.find(L"Geographic index");
+		pos3 = complete_webpage.rfind(L'"', pos1);
+		pos2 = complete_webpage.rfind(L'"', pos3 - 1);
+		temp1 = complete_webpage.substr(pos2 + 1, pos3 - pos2 - 1);
+		pos1 = url_midway.rfind(L'/');
+		url_midway.erase(pos1 + 1);
+		url_midway += temp1;
+
+		url_final = server + url_midway;
+		clean_url(url_final);
+		temp1 = year_folder + L"\\" + cata_url_names[ii];
+		temp2 = cata_url_names[ii] + L" raw geo list.bin";
+		error = download(url_final, temp1, temp2);
+		cout << "Raw Geo: " << utf16to8(cata_url_names[ii]) << endl;
+	}
+}
+void convert_geolists(wstring year_folder)
+{
+	// Create a log file for bugged raw geo lists.
+	wstring wdrive, temp1, temp2;
+	size_t pos1, pos2, pos3;
+	wdrive = year_folder.substr(0, 2);  
+	temp1 = wdrive + L"\\Bugged Raw Geo Lists.txt";
+	HANDLE hfail = CreateFileW(temp1.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, CREATE_ALWAYS, 0, NULL);
+	if (hfail == INVALID_HANDLE_VALUE) { err(L"CreateFile1-convert_geolists");}
+	DWORD bytes_written, message_size;
+	HANDLE hgeo = INVALID_HANDLE_VALUE;
+
+	// Determine which catalogues are locally stored in the given year folder.
+	int iyear;
+	vector<wstring> cata_folders = get_subfolders(year_folder);
+	vector<wstring> cata_names;
+	for (int ii = 0; ii < cata_folders.size(); ii++)
+	{
+		pos1 = cata_folders[ii].rfind(L"\\");
+		temp1 = cata_folders[ii].substr(pos1 + 1);
+		cata_names.push_back(temp1);
+	}
+	pos1 = year_folder.rfind(L"\\");
+	wstring wyear = year_folder.substr(pos1 + 1);
+
+	// For each catalogue's raw geo list, extract the GIDs, region names, and indentations. Then print.
+	wstring raw_name, raw_file, gid, rname, cooked_name;
+	wchar_t ind;
+	size_t pos_start, pos_stop;
+	vector<int> space_history = { 0 };
+	int indent, spaces;
+	for (int ii = 0; ii < cata_folders.size(); ii++)
+	{
+		raw_name = cata_folders[ii] + L"\\" + cata_names[ii] + L" raw geo list.bin";
+		raw_file = w_memory(raw_name);
+		pos_start = raw_file.find(L"geo-download");
+		if (pos_start >= raw_file.size())  // If the file is bugged, dump it in the shared bugged file.
+		{
+			temp1 = raw_name + L"\r\n";
+			message_size = (DWORD)temp1.size() * 2;
+			if (!WriteFile(hfail, temp1.c_str(), message_size, &bytes_written, NULL))
+			{
+				err(L"writefile1-convert_geolists");
+			}
+			continue;
+		}
+		else  // If the file is good, make a new file 
+		{
+			cooked_name = cata_folders[ii] + L"\\" + cata_names[ii] + L" geo list.bin";
+			hgeo = CreateFileW(cooked_name.c_str(), (GENERIC_READ | GENERIC_WRITE), (FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE), NULL, CREATE_ALWAYS, 0, NULL);
+			if (hgeo == INVALID_HANDLE_VALUE) { err(L"CreateFile2-convert_geolists"); }			
+		}
+		pos_stop = raw_file.rfind(L"ContentEnd");
+		pos1 = raw_file.find(L"indent", pos_start);
+		do
+		{
+			// Get the indent.
+			ind = raw_file[pos1 + 7];  // Number of spaces or negative sign.
+			if (ind == L'-')
+			{
+				indent = 0;
+			}
+			else
+			{
+				spaces = (int)ind - 48;
+				for (int jj = 0; jj < space_history.size(); jj++)
+				{
+					if (spaces == space_history[jj])
+					{
+						indent = jj;
+						break;
+					}
+					else if (jj == space_history.size() - 1)
+					{
+						indent = space_history.size();
+						space_history.push_back(spaces);
+					}
+				}
+			}
+			
+			// Get the GID.
+			pos1 = raw_file.find(L"GID", pos1);
+			pos2 = raw_file.find(L'&', pos1 + 1);
+			gid = raw_file.substr(pos1 + 4, pos2 - pos1 - 4);
+
+			// Get the region name.
+			pos1 = raw_file.find(L'>', pos2);
+			pos2 = raw_file.find(L'<', pos1);
+			rname = raw_file.substr(pos1 + 1, pos2 - pos1 - 1);
+
+			// Add a new line to the geo list for this region.
+			temp1 = gid + L'$' + rname + L'$' + to_wstring(indent) + L"\r\n";
+			message_size = (DWORD)temp1.size() * 2;
+			if (!WriteFile(hgeo, temp1.c_str(), message_size, &bytes_written, NULL))
+			{
+				err(L"writefile2-convert_geolists");
+			}
+
+			// Next region...
+			pos1 = raw_file.find(L"indent", pos2);
+		} while (pos1 < pos_stop);
+	}
+}
+
 int main()
 {
 	signal(SIGINT, halt);
 	setlocale(LC_ALL, ".UTF8");
+
+	//download_geolists(L"F:\\2017");
+	convert_geolists(L"F:\\2017");
+
+	/*
 	wstring year;
 	wcout << L"Specify year to download (";
 	for (int ii = 0; ii < years.size(); ii++)
@@ -1729,10 +2018,12 @@ int main()
 	}
 	wcout << L"):" << endl;
 	wcin >> year;
+	*/
 
-	initialize(year);
-	yearly_downloader(year);
-	//download(L"www12.statcan.gc.ca/global/URLRedirect.cfm?lang=E&ips=98-311-XCB2011023", L"F:", L"2011nocsv.txt");	
+	//initialize(year);
+	//yearly_downloader(year);
+	//download(L"www12.statcan.gc.ca/census-recensement/2016/dp-pd/dt-td/Rp-eng.cfm?TABID=6&LANG=E&APATH=3&DETAIL=0&DIM=0&FL=A&FREE=0&GC=0&GID=0&GK=0&GRP=1&PID=110598&PRID=10&PTYPE=109445&S=0&SHOWALL=0&SUB=0&Temporal=2017&THEME=126&VID=0&VNAMEE=&VNAMEF=&D1=0&D2=0&D3=0&D4=0&D5=0&D6=0", L"F:", L"cata geo index 2016.txt");	
+	
 	system("pause");
 	return 0;
 }
